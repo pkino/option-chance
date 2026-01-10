@@ -1,0 +1,140 @@
+# Option Strategy Configuration
+
+# データソース設定
+data_sources:
+  jpx:
+    base_url: "https://www.jpx.co.jp/markets/derivatives/option-price"
+    timeout: 30
+  jquants:
+    api_url: "https://api.jquants.com/v1/option/index_option"
+    timeout: 30
+
+# オプション選定条件（Tier B: コア戦略）
+option_selection:
+  premium_range:
+    min: 20  # 円
+    max: 40  # 円
+  dte_range:  # Days To Expiration (営業日)
+    min: 10
+    max: 30
+  delta_range:
+    min: -0.40
+    max: -0.25
+  target_delta: -0.30  # 最も近いデルタを選択
+
+# Gate① VI安定条件
+gate_vi:
+  vi_threshold: 20
+  vi_10d_avg_threshold: 20
+  vi_10d_std_threshold: 1.5
+  vi_10d_slope_threshold: 0
+
+# Gate② 天井示唆条件
+gate_top:
+  # A. テクニカル（4条件のうち2つ以上）
+  technical:
+    required_conditions: 2
+
+    # A1: RSI過熱→反転
+    rsi:
+      period: 14
+      overbought: 70
+      lookback_days: 5  # 過去5営業日以内に70到達
+      consecutive_decline: 2  # 2日連続低下
+
+    # A2: MACD弱化
+    macd:
+      fast_period: 12
+      slow_period: 26
+      signal_period: 9
+      hist_consecutive_decline: 3  # ヒストグラム3日連続縮小
+      macd_positive: True  # MACDラインが高位（>0）
+
+    # A3: ダイバージェンス
+    divergence:
+      lookback_days: 20
+
+    # A4: 伸び切り（ボリンジャー）
+    bollinger:
+      period: 25
+      std_dev: 2
+      upper_wick_ratio: 0.4  # 上ヒゲ比率
+
+  # B. 需給（3条件のうち1つ以上）【必須】
+  supply_demand:
+    required_conditions: 1
+
+    # B1: 高値圏の出来高失速
+    volume_failure:
+      short_period: 5
+      long_period: 20
+      ratio_threshold: 0.85  # 5日平均/20日平均 <= 0.85
+      high_proximity: 0.99  # 直近高値の99%以内
+
+    # B2: 上ヒゲ優勢
+    upper_wick:
+      lookback_days: 3
+      required_days: 2  # 3日中2日以上
+      wick_ratio: 0.4
+      close_from_high: 0.995  # Close <= High * 0.995
+
+    # B3: ギャップアップ失速
+    gap_up_failure:
+      gap_threshold: 1.002  # Open >= 前日High * 1.002
+
+  # C. ファンダ/マクロ（オプション：強化フラグ）
+  macro:
+    event_lookforward_days: 5  # 今後5営業日以内のイベント
+
+# Trigger③ エントリートリガー
+trigger:
+  # 前日安値割れ OR 5日MA割れ
+  prev_low_break: True
+  ma5_break: True
+
+# 退出ルール
+exit_rules:
+  # 損切り
+  stop_loss:
+    time_based_days: 5  # 5営業日で強制決済
+    structural:
+      new_high: True  # 直近高値更新
+      indicator_reversal: True  # RSI/MACD再上向き
+
+  # 利確
+  take_profit:
+    double_position_close: 0.5  # 2倍到達で50%利確
+    trailing:
+      mode: "A"  # A: 保守（固定日数）, B: トレーリング
+      hold_days: 10  # モードAの場合の最大保有日数
+      max_hold_days: 15  # モードBの場合の最大保有日数
+      peak_drawdown_pct: 0.30  # モードBのトレーリング閾値
+
+# リスク管理
+risk_management:
+  max_loss_pct: 0.005  # 口座資産の0.5%（0.3〜0.7%）
+  max_positions: 2  # 同時保有最大2本
+  no_averaging_down: True  # ナンピン禁止
+
+# バックテスト設定
+backtest:
+  lookback_years: 5
+  slippage:
+    entry: "ask"  # エントリーはask
+    exit: "bid"   # イグジットはbid
+  commission: 0  # 後で追加
+
+# 通知設定
+notifications:
+  slack:
+    enabled: True
+    webhook_env: "SLACK_WEBHOOK_URL"
+
+# イベント日付（手動管理）
+# フォーマット: YYYY-MM-DD
+events:
+  # 例: 日銀会合、FOMC、CPI、メジャーSQなど
+  # - "2024-12-19"
+  # - "2024-12-20"
+  - "2025-12-17"
+  - "2025-12-18"

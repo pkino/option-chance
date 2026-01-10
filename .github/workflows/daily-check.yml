@@ -1,0 +1,65 @@
+name: Daily Entry Check
+
+on:
+  # 毎日 日本時間 9:00 (UTC 0:00) に実行
+  schedule:
+    - cron: '0 0 * * *'
+
+  # 手動実行も可能
+  workflow_dispatch:
+    inputs:
+      lookback_days:
+        description: '過去何日分のデータを取得するか'
+        required: false
+        default: '60'
+      send_no_signal:
+        description: 'シグナルがない場合もSlackに通知する'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  check-entry-signal:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run daily check
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          JQUANTS_REFRESH_TOKEN: ${{ secrets.JQUANTS_REFRESH_TOKEN }}
+          JQUANTS_EMAIL: ${{ secrets.JQUANTS_EMAIL }}
+        run: |
+          LOOKBACK_DAYS=${{ github.event.inputs.lookback_days || '60' }}
+          SEND_NO_SIGNAL=${{ github.event.inputs.send_no_signal || 'false' }}
+
+          if [ "$SEND_NO_SIGNAL" = "true" ]; then
+            python scripts/daily_check.py --lookback-days $LOOKBACK_DAYS --send-no-signal
+          else
+            python scripts/daily_check.py --lookback-days $LOOKBACK_DAYS
+          fi
+
+      - name: Upload logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: error-logs
+          path: |
+            *.log
+          retention-days: 7
