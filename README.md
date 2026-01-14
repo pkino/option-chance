@@ -158,7 +158,7 @@ python scripts/run_backtest.py --start-date 2020-01-01 --end-date 2025-01-01
 
 ### 自動実行
 
-GitHub Actionsが毎日 **日本時間 9:00 (UTC 0:00)** に自動実行されます。
+GitHub Actionsが毎日 **日本時間 18:00 (UTC 9:00)** に自動実行されます。
 
 ### 手動実行
 
