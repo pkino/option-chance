@@ -245,10 +245,17 @@ def main():
     checker = DailyEntryChecker(config_path=args.config)
 
     # 実行
-    has_signal = checker.run(lookback_days=args.lookback_days, send_no_signal=args.send_no_signal)
+    try:
+        has_signal = checker.run(lookback_days=args.lookback_days, send_no_signal=args.send_no_signal)
 
-    # 終了コード
-    sys.exit(0 if has_signal else 1)
+        # 正常終了（シグナルの有無に関わらず成功）
+        # エントリーシグナルがない日が大半なので、これは正常な状態
+        sys.exit(0)
+    except Exception as e:
+        print(f"\n❌ 実行エラー: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":

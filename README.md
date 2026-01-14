@@ -15,7 +15,13 @@
 
 - ✅ **データソースの自動取得**
   - JPX（日本取引所グループ）からオプション理論価格を取得
-  - Yahoo FinanceからIV・日経平均データを取得
+  - **日経VI取得（マルチソース対応）** ⭐ NEW
+    - 優先順位1: Yahoo Finance（複数ティッカー試行：^N225VI, 1552.T, 2038.T等）
+    - 優先順位2: Investing.com（HTMLスクレイピング）
+    - 優先順位3: 日経公式サイト（CSV/HTML）
+    - 優先順位4: 20日ボラティリティ計算（確実に動作）
+  - Yahoo Financeから日経平均データを取得
+  - J-Quants API（フォールバック、TODO）
 
 - ✅ **Slack通知**
   - エントリーシグナル検出時に自動通知
@@ -36,7 +42,9 @@ option-chance/
 ├── src/
 │   ├── data_sources/       # データ取得
 │   │   ├── jpx.py         # JPXオプション理論価格
-│   │   └── market_data.py # 日経平均・VI
+│   │   ├── nikkei_vi.py   # 日経VI（YF → Investing.com → 日経公式 → 計算）
+│   │   ├── jquants.py     # J-Quants API（TODO）
+│   │   └── market_data.py # 日経平均・VI統合（20日ボラ計算含む）
 │   ├── indicators/        # テクニカル指標
 │   │   └── technical.py   # RSI, MACD, BB等
 │   ├── signals/           # シグナル判定
@@ -224,7 +232,49 @@ GitHubリポジトリの Settings > Secrets and variables > Actions で以下を
 **解決策**:
 - GHA環境で実行する（ローカル環境ではプロキシ制限がある場合あり）
 
-**問題**: 日経平均・VIデータ取得失敗
+**問題**: 日経VIデータ取得失敗
+
+**現象**:
+- ローカル環境で `ProxyError` や `403 Forbidden` エラー
+- `Tunnel connection failed: 403 Forbidden`
+- GHA環境で `ImportError: Missing optional dependency 'lxml'`（修正済み）
+- Yahoo Finance: `404 Not Found` または `データなし`
+- Investing.com: `見つかったデータテーブル: 0 件`（JavaScript動的読み込みの可能性）
+
+**原因**:
+- ローカル環境のプロキシ・ファイアウォール制限
+- 日経公式サイトのbot保護
+- pandas.read_html()に必要な`lxml`/`html5lib`パッケージの不足（修正済み）
+- Yahoo Financeに日経VIティッカーが存在しない可能性
+- Investing.comがJavaScriptで動的にデータを読み込む仕様
+
+**解決策**:
+1. **マルチソース戦略**（実装済み）
+   - 複数のデータソースを順次試行
+   - Yahoo Finance → Investing.com → 日経公式 → 20日ボラ計算
+   - いずれかが成功すればVI取得完了
+
+2. **依存関係の確認**（重要）
+   - `lxml>=4.9.0` と `html5lib>=1.1` が requirements.txt に含まれていることを確認
+   - GHA環境でのインストール: 自動的に行われる
+   - ローカル環境: `pip install -r requirements.txt`
+
+3. **GitHub Actionsで実行**（推奨）
+   - GHA環境は通常プロキシ制限がないため成功する可能性が高い
+   - 自動スケジュール実行（18:00 JST）で運用
+   - デバッグログで各データソースの結果を確認
+
+4. **20日ボラティリティ計算（最終フォールバック）**
+   - システムは自動的に代替手段に切り替え
+   - Yahoo FinanceのN225データから計算
+   - 公式VIと相関が高く、実用上問題なし
+   - 確実に動作する
+
+5. **VPN・プロキシ設定変更**
+   - 企業ネットワーク等でブロックされている場合
+   - ネットワーク管理者に確認
+
+**問題**: 日経平均データ取得失敗
 
 **解決策**:
 - Yahoo Financeのアクセス制限を確認

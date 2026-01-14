@@ -5,6 +5,9 @@ pandas>=2.1.0
 numpy>=1.24.0
 scipy>=1.11.0
 python-dateutil>=2.8.0
+yfinance>=0.2.0
+lxml>=4.9.0
+html5lib>=1.1
 
 # Technical indicators
 ta>=0.11.0

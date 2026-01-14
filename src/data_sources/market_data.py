@@ -2,6 +2,7 @@
 from datetime import datetime, date, timedelta
 from typing import List, Optional
 import pandas as pd
+import numpy as np
 
 try:
     import yfinance as yf
@@ -12,6 +13,7 @@ except ImportError:
     print("警告: yfinance がインストールされていません")
 
 from ..models.option import MarketData
+from .nikkei_vi import NikkeiVIFetcher
 
 
 class MarketDataFetcher:
@@ -20,6 +22,7 @@ class MarketDataFetcher:
     def __init__(self):
         self.nikkei_symbol = "^N225"  # 日経平均
         self.vi_symbol = "^VXN225"  # 日経VI（実際のシンボルを要確認）
+        self.nikkei_vi_fetcher = NikkeiVIFetcher()  # 日経公式VI取得
 
     def fetch_nikkei_data(
         self, start_date: date, end_date: Optional[date] = None
@@ -76,7 +79,7 @@ class MarketDataFetcher:
         self, start_date: date, end_date: Optional[date] = None
     ) -> dict[date, float]:
         """
-        日経VIのデータを取得
+        日経VIのデータを取得（優先順位：日経公式→20日ボラティリティ計算）
 
         Args:
             start_date: 開始日
@@ -85,40 +88,53 @@ class MarketDataFetcher:
         Returns:
             {date: vi_value} の辞書
         """
-        if not HAS_YFINANCE:
-            raise ImportError("yfinance が必要です")
-
         if end_date is None:
             end_date = date.today()
 
         print(f"日経VIデータ取得: {start_date} 〜 {end_date}")
 
+        # 優先順位1: 日経公式サイトから取得
         try:
-            # 複数のシンボルを試す
-            symbols_to_try = [
-                "^VXN225",  # 可能性1
-                "^N225VI",  # 可能性2
-                "1552.T",  # 国際のETF VIX短期先物指数（代替）
-            ]
+            print("📊 日経公式サイトからVI取得を試行...")
+            vi_dict = self.nikkei_vi_fetcher.fetch_vi_data(start_date, end_date)
+            if vi_dict and len(vi_dict) > 0:
+                print(f"✅ 日経公式VI取得成功: {len(vi_dict)} 件")
+                return vi_dict
+            else:
+                print("⚠️ 日経公式VI: 空のデータが返されました（データソースにデータがない可能性）")
+        except Exception as e:
+            print(f"⚠️ 日経公式VI取得失敗: {e}")
+            import traceback
+            traceback.print_exc()
 
-            for symbol in symbols_to_try:
-                try:
-                    ticker = yf.Ticker(symbol)
-                    df = ticker.history(start=start_date, end=end_date + timedelta(days=1))
+        # 優先順位2: 日経平均の20日ボラティリティを計算
+        try:
+            if not HAS_YFINANCE:
+                print("⚠️ yfinance がインストールされていません")
+                return {}
 
-                    if not df.empty:
-                        print(f"VIデータ取得成功（シンボル: {symbol}）")
-                        vi_dict = {idx.date(): float(row["Close"]) for idx, row in df.iterrows()}
-                        return vi_dict
-                except:
-                    continue
+            print("📊 日経平均の20日ボラティリティを計算...")
+            ticker = yf.Ticker(self.nikkei_symbol)
+            df = ticker.history(start=start_date, end=end_date + timedelta(days=1))
 
-            print("警告: VIデータが取得できませんでした。代替データソースを検討してください")
-            return {}
+            if not df.empty:
+                # 日経平均の20日ボラティリティを計算
+                returns = df["Close"].pct_change()
+                rolling_vol = returns.rolling(window=20).std() * np.sqrt(252) * 100
+
+                print(f"✅ 20日ボラティリティ計算成功（VI代替）")
+                vi_dict = {
+                    idx.date(): float(vol)
+                    for idx, vol in rolling_vol.items()
+                    if not np.isnan(vol)
+                }
+                return vi_dict
 
         except Exception as e:
-            print(f"VIデータ取得エラー: {e}")
-            return {}
+            print(f"⚠️ ボラティリティ計算失敗: {e}")
+
+        print("❌ VIデータが取得できませんでした")
+        return {}
 
     def fetch_market_data_with_vi(
         self, start_date: date, end_date: Optional[date] = None
