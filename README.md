@@ -16,7 +16,6 @@
 - ✅ **データソースの自動取得**
   - JPX（日本取引所グループ）からオプション理論価格を取得
   - Yahoo FinanceからIV・日経平均データを取得
-  - J-Quants API（フォールバック）
 
 - ✅ **Slack通知**
   - エントリーシグナル検出時に自動通知
@@ -37,7 +36,6 @@ option-chance/
 ├── src/
 │   ├── data_sources/       # データ取得
 │   │   ├── jpx.py         # JPXオプション理論価格
-│   │   ├── jquants.py     # J-Quants API（TODO）
 │   │   └── market_data.py # 日経平均・VI
 │   ├── indicators/        # テクニカル指標
 │   │   └── technical.py   # RSI, MACD, BB等
@@ -84,11 +82,6 @@ pip install -r requirements.txt
 ```bash
 # Slack Webhook URL（必須）
 SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
-
-# J-Quants API（オプション：JPX取得失敗時のフォールバック）
-JQUANTS_REFRESH_TOKEN=your_refresh_token
-# または
-JQUANTS_EMAIL=your_email@example.com
 ```
 
 ### 3. 設定ファイルのカスタマイズ
@@ -172,8 +165,6 @@ GitHub Actionsが毎日 **日本時間 18:00 (UTC 9:00)** に自動実行され�
 GitHubリポジトリの Settings > Secrets and variables > Actions で以下を設定：
 
 - `SLACK_WEBHOOK_URL` (必須)
-- `JQUANTS_REFRESH_TOKEN` (オプション)
-- `JQUANTS_EMAIL` (オプション)
 
 ## 戦略の詳細
 
@@ -232,7 +223,6 @@ GitHubリポジトリの Settings > Secrets and variables > Actions で以下を
 
 **解決策**:
 - GHA環境で実行する（ローカル環境ではプロキシ制限がある場合あり）
-- J-Quants APIをフォールバックとして設定
 
 **問題**: 日経平均・VIデータ取得失敗
 
@@ -249,7 +239,6 @@ GitHubリポジトリの Settings > Secrets and variables > Actions で以下を
 
 ## TODO
 
-- [ ] J-Quants API実装
 - [ ] 構造損切りの実装
 - [ ] トレーリング利確の実装
 - [ ] バックテスト実行スクリプト
