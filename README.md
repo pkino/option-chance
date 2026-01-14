@@ -90,11 +90,6 @@ pip install -r requirements.txt
 ```bash
 # Slack Webhook URL（必須）
 SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
-
-# J-Quants API（オプション：JPX取得失敗時のフォールバック）
-JQUANTS_REFRESH_TOKEN=your_refresh_token
-# または
-JQUANTS_EMAIL=your_email@example.com
 ```
 
 ### 3. 設定ファイルのカスタマイズ
@@ -178,8 +173,6 @@ GitHub Actionsが毎日 **日本時間 18:00 (UTC 9:00)** に自動実行され�
 GitHubリポジトリの Settings > Secrets and variables > Actions で以下を設定：
 
 - `SLACK_WEBHOOK_URL` (必須)
-- `JQUANTS_REFRESH_TOKEN` (オプション)
-- `JQUANTS_EMAIL` (オプション)
 
 ## 戦略の詳細
 
@@ -238,7 +231,6 @@ GitHubリポジトリの Settings > Secrets and variables > Actions で以下を
 
 **解決策**:
 - GHA環境で実行する（ローカル環境ではプロキシ制限がある場合あり）
-- J-Quants APIをフォールバックとして設定
 
 **問題**: 日経VIデータ取得失敗
 
@@ -297,7 +289,6 @@ GitHubリポジトリの Settings > Secrets and variables > Actions で以下を
 
 ## TODO
 
-- [ ] J-Quants API実装
 - [ ] 構造損切りの実装
 - [ ] トレーリング利確の実装
 - [ ] バックテスト実行スクリプト

@@ -5,9 +5,6 @@ data_sources:
   jpx:
     base_url: "https://www.jpx.co.jp/markets/derivatives/option-price"
     timeout: 30
-  jquants:
-    api_url: "https://api.jquants.com/v1/option/index_option"
-    timeout: 30
 
 # オプション選定条件（Tier B: コア戦略）
 option_selection:
