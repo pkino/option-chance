@@ -204,9 +204,10 @@ class SignalDetector:
 
         row = self.df.iloc[idx]
 
-        # VIデータがない場合は条件を満たさない
+        # VIデータがない場合はGate①をスキップ（Trueを返して続行）
+        # 日経平均の20日ボラティリティから生成されるため、初期期間以外は通常存在する
         if pd.isna(row.get("vi")) or pd.isna(row.get("vi_ma_10")):
-            return False
+            return True
 
         config = self.config["gate_vi"]
 
