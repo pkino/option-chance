@@ -43,8 +43,6 @@ jobs:
       - name: Run daily check
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          JQUANTS_REFRESH_TOKEN: ${{ secrets.JQUANTS_REFRESH_TOKEN }}
-          JQUANTS_EMAIL: ${{ secrets.JQUANTS_EMAIL }}
         run: |
           LOOKBACK_DAYS=${{ github.event.inputs.lookback_days || '60' }}
           SEND_NO_SIGNAL=${{ github.event.inputs.send_no_signal || 'false' }}
