@@ -31,8 +31,6 @@ class MarketDataFetcher:
         if end_date is None:
             end_date = date.today()
 
-        print(f"日経平均データ取得: {start_date} 〜 {end_date}")
-
         try:
             market_data = self.nikkei_225_fetcher.fetch_nikkei_data(start_date, end_date)
 
