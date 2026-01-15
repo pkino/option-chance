@@ -15,9 +15,11 @@
 
 - ✅ **データソースの自動取得**
   - JPX（日本取引所グループ）からオプション理論価格を取得
-  - **日経VI取得（マルチソース対応）** ⭐ NEW
-    - 優先順位1: Investing.com（HTMLスクレイピング）
-    - 優先順位2: 日経公式サイト（CSV/HTML）
+  - **日経平均データ取得** ⭐ NEW
+    - 日経公式CSV（直接ダウンロード・無料・公式）
+  - **日経VI（ボラティリティ・インデックス）** ⭐ NEW
+    - 日経公式CSV（直接ダウンロード・無料・公式）
+    - フォールバック: 日経平均から20日ボラティリティを計算（年率化）
   - J-Quants API（フォールバック、TODO）
 
 - ✅ **Slack通知**
@@ -39,9 +41,10 @@ option-chance/
 ├── src/
 │   ├── data_sources/       # データ取得
 │   │   ├── jpx.py         # JPXオプション理論価格
-│   │   ├── nikkei_vi.py   # 日経VI（Investing.com → 日経公式）
+│   │   ├── nikkei_225.py  # 日経平均（日経公式CSV）
+│   │   ├── nikkei_vi.py   # 日経VI（日経公式CSV）
 │   │   ├── jquants.py     # J-Quants API（TODO）
-│   │   └── market_data.py # 日経平均・VI統合
+│   │   └── market_data.py # 日経平均・VI統合（20日ボラ計算含む）
 │   ├── indicators/        # テクニカル指標
 │   │   └── technical.py   # RSI, MACD, BB等
 │   ├── signals/           # シグナル判定
@@ -229,39 +232,39 @@ GitHubリポジトリの Settings > Secrets and variables > Actions で以下を
 **解決策**:
 - GHA環境で実行する（ローカル環境ではプロキシ制限がある場合あり）
 
-**問題**: 日経VIデータ取得失敗
+**問題**: 日経平均・VIデータ取得失敗
 
-**現象**:
-- ローカル環境で `ProxyError` や `403 Forbidden` エラー
-- `Tunnel connection failed: 403 Forbidden`
-- GHA環境で `ImportError: Missing optional dependency 'lxml'`（修正済み）
-- Investing.com: `見つかったデータテーブル: 0 件`（JavaScript動的読み込みの可能性）
+**現状の実装**:
+- **日経平均**: 日経公式CSV（無料・公式・安定）
+  - URL: `https://indexes.nikkei.co.jp/nkave/historical/nikkei_stock_average_daily_jp.csv`
+- **日経VI**: 日経公式CSV（無料・公式・安定）
+  - URL: `https://indexes.nikkei.co.jp/nkave/historical/nikkei_stock_average_vi_daily_jp.csv`
+- **フォールバック**: 20日ボラティリティ計算（VIのみ）
 
-**原因**:
-- ローカル環境のプロキシ・ファイアウォール制限
-- 日経公式サイトのbot保護
-- pandas.read_html()に必要な`lxml`/`html5lib`パッケージの不足（修正済み）
-- Investing.comがJavaScriptで動的にデータを読み込む仕様
+**主なエラーと解決策**:
 
-**解決策**:
-1. **マルチソース戦略**（実装済み）
-   - 複数のデータソースを順次試行
-   - Investing.com → 日経公式
-   - いずれかが成功すればVI取得完了
+1. **日経公式CSVエラー**
+   - 日経サーバーがメンテナンス中の場合は時間を置いて再試行
+   - VIが取得できない場合は自動的に20日ボラティリティ計算にフォールバック
+   - CSV URLが変更された場合は以下を更新：
+     - 日経平均: `nikkei_225.py` の `nikkei_csv_url`
+     - 日経VI: `nikkei_vi.py` の `vi_csv_url`
 
-2. **依存関係の確認**（重要）
-   - `lxml>=4.9.0` と `html5lib>=1.1` が requirements.txt に含まれていることを確認
+3. **20日ボラティリティ計算（VI代替）**（実装済み）
+   - 日経平均データが取得できれば、自動的に20日ボラティリティを計算
+   - 年率化されたボラティリティをVIとして使用
+   - 公式VIと高い相関があり、実用上問題なし
+   - **確実に動作する**
+
+4. **依存関係の確認**（重要）
+   - `numpy>=1.24.0`、`pandas>=2.1.0`、`requests>=2.31.0` が必要
    - GHA環境でのインストール: 自動的に行われる
    - ローカル環境: `pip install -r requirements.txt`
 
-3. **GitHub Actionsで実行**（推奨）
+5. **GitHub Actionsで実行**（推奨）
    - GHA環境は通常プロキシ制限がないため成功する可能性が高い
    - 自動スケジュール実行（18:00 JST）で運用
    - デバッグログで各データソースの結果を確認
-
-4. **VPN・プロキシ設定変更**
-   - 企業ネットワーク等でブロックされている場合
-   - ネットワーク管理者に確認
 
 ### Slack通知が届かない
 

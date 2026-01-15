@@ -5,21 +5,21 @@ import pandas as pd
 
 from ..models.option import MarketData
 from .nikkei_vi import NikkeiVIFetcher
+from .nikkei_225 import Nikkei225Fetcher
 
 
 class MarketDataFetcher:
     """市場データの取得"""
 
     def __init__(self):
-        self.nikkei_symbol = "^N225"  # 日経平均
-        self.vi_symbol = "^VXN225"  # 日経VI（実際のシンボルを要確認）
-        self.nikkei_vi_fetcher = NikkeiVIFetcher()  # 日経公式VI取得
+        self.nikkei_vi_fetcher = NikkeiVIFetcher()  # 日経VI取得
+        self.nikkei_225_fetcher = Nikkei225Fetcher()  # 日経平均取得
 
     def fetch_nikkei_data(
         self, start_date: date, end_date: Optional[date] = None
     ) -> List[MarketData]:
         """
-        日経平均のデータを取得（Yahoo Finance削除のため無効化）
+        日経平均のデータを取得（日経公式サイト/Investing.comから取得）
 
         Args:
             start_date: 開始日
@@ -28,12 +28,29 @@ class MarketDataFetcher:
         Returns:
             MarketDataのリスト
         """
-        raise NotImplementedError(
-            "日経平均データ取得機能はYahoo Finance削除により無効化されました"
-        )
+        if end_date is None:
+            end_date = date.today()
+
+        print(f"日経平均データ取得: {start_date} 〜 {end_date}")
+
+        try:
+            market_data = self.nikkei_225_fetcher.fetch_nikkei_data(start_date, end_date)
+
+            if market_data:
+                print(f"✅ 取得完了: {len(market_data)} 件")
+                return market_data
+            else:
+                print("⚠️ 日経平均データが取得できませんでした")
+                return []
+
+        except Exception as e:
+            print(f"❌ 日経平均データ取得エラー: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
 
     def fetch_vi_data(
-        self, start_date: date, end_date: Optional[date] = None
+        self, start_date: date, end_date: Optional[date] = None, market_data: Optional[List[MarketData]] = None
     ) -> dict[date, float]:
         """
         日経VIのデータを取得（優先順位：日経公式→20日ボラティリティ計算）
@@ -41,6 +58,7 @@ class MarketDataFetcher:
         Args:
             start_date: 開始日
             end_date: 終了日（Noneの場合は今日）
+            market_data: 既に取得した日経平均データ（20日ボラ計算用）
 
         Returns:
             {date: vi_value} の辞書
@@ -58,11 +76,30 @@ class MarketDataFetcher:
                 print(f"✅ 日経公式VI取得成功: {len(vi_dict)} 件")
                 return vi_dict
             else:
-                print("⚠️ 日経公式VI: 空のデータが返されました（データソースにデータがない可能性）")
+                print("⚠️ 日経公式VI: 空のデータが返されました")
         except Exception as e:
             print(f"⚠️ 日経公式VI取得失敗: {e}")
-            import traceback
-            traceback.print_exc()
+
+        # 優先順位2: 日経平均の20日ボラティリティを計算
+        print("📊 20日ボラティリティ計算にフォールバック...")
+        if market_data and len(market_data) > 0:
+            vi_dict = self.nikkei_225_fetcher.calculate_20day_volatility(market_data)
+            if vi_dict and len(vi_dict) > 0:
+                print(f"✅ 20日ボラティリティ計算成功: {len(vi_dict)} 件")
+                return vi_dict
+        else:
+            print("⚠️ 日経平均データがないため、20日ボラティリティを計算できません")
+            # market_dataがない場合は日経平均データを取得
+            try:
+                print("  日経平均データを取得して再試行...")
+                nikkei_data = self.fetch_nikkei_data(start_date, end_date)
+                if nikkei_data and len(nikkei_data) > 0:
+                    vi_dict = self.nikkei_225_fetcher.calculate_20day_volatility(nikkei_data)
+                    if vi_dict and len(vi_dict) > 0:
+                        print(f"✅ 20日ボラティリティ計算成功: {len(vi_dict)} 件")
+                        return vi_dict
+            except Exception as e:
+                print(f"⚠️ 日経平均データ取得・ボラティリティ計算失敗: {e}")
 
         print("❌ VIデータが取得できませんでした")
         return {}
@@ -83,8 +120,8 @@ class MarketDataFetcher:
         # 日経平均データを取得
         market_data = self.fetch_nikkei_data(start_date, end_date)
 
-        # VIデータを取得
-        vi_dict = self.fetch_vi_data(start_date, end_date)
+        # VIデータを取得（日経平均データを渡して20日ボラ計算に利用）
+        vi_dict = self.fetch_vi_data(start_date, end_date, market_data=market_data)
 
         # VIをマージ
         for data in market_data:
