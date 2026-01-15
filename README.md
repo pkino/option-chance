@@ -21,7 +21,6 @@
     - 優先順位3: 日経公式サイト（CSV/HTML）
     - 優先順位4: 20日ボラティリティ計算（確実に動作）
   - Yahoo Financeから日経平均データを取得
-  - J-Quants API（フォールバック、TODO）
 
 - ✅ **Slack通知**
   - エントリーシグナル検出時に自動通知
@@ -43,7 +42,6 @@ option-chance/
 │   ├── data_sources/       # データ取得
 │   │   ├── jpx.py         # JPXオプション理論価格
 │   │   ├── nikkei_vi.py   # 日経VI（YF → Investing.com → 日経公式 → 計算）
-│   │   ├── jquants.py     # J-Quants API（TODO）
 │   │   └── market_data.py # 日経平均・VI統合（20日ボラ計算含む）
 │   ├── indicators/        # テクニカル指標
 │   │   └── technical.py   # RSI, MACD, BB等
