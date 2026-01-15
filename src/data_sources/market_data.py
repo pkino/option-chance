@@ -2,15 +2,6 @@
 from datetime import datetime, date, timedelta
 from typing import List, Optional
 import pandas as pd
-import numpy as np
-
-try:
-    import yfinance as yf
-
-    HAS_YFINANCE = True
-except ImportError:
-    HAS_YFINANCE = False
-    print("警告: yfinance がインストールされていません")
 
 from ..models.option import MarketData
 from .nikkei_vi import NikkeiVIFetcher
@@ -28,7 +19,7 @@ class MarketDataFetcher:
         self, start_date: date, end_date: Optional[date] = None
     ) -> List[MarketData]:
         """
-        日経平均のデータを取得
+        日経平均のデータを取得（Yahoo Finance削除のため無効化）
 
         Args:
             start_date: 開始日
@@ -37,43 +28,9 @@ class MarketDataFetcher:
         Returns:
             MarketDataのリスト
         """
-        if not HAS_YFINANCE:
-            raise ImportError(
-                "yfinance が必要です: pip install yfinance でインストールしてください"
-            )
-
-        if end_date is None:
-            end_date = date.today()
-
-        print(f"日経平均データ取得: {start_date} 〜 {end_date}")
-
-        try:
-            # Yahoo Financeから取得
-            ticker = yf.Ticker(self.nikkei_symbol)
-            df = ticker.history(start=start_date, end=end_date + timedelta(days=1))
-
-            if df.empty:
-                raise ValueError("データが取得できませんでした")
-
-            # MarketDataに変換
-            market_data = []
-            for idx, row in df.iterrows():
-                data = MarketData(
-                    date=idx.date(),
-                    open=float(row["Open"]),
-                    high=float(row["High"]),
-                    low=float(row["Low"]),
-                    close=float(row["Close"]),
-                    volume=int(row["Volume"]) if row["Volume"] > 0 else None,
-                )
-                market_data.append(data)
-
-            print(f"取得完了: {len(market_data)} 件")
-            return market_data
-
-        except Exception as e:
-            print(f"日経平均データ取得エラー: {e}")
-            raise
+        raise NotImplementedError(
+            "日経平均データ取得機能はYahoo Finance削除により無効化されました"
+        )
 
     def fetch_vi_data(
         self, start_date: date, end_date: Optional[date] = None
@@ -106,32 +63,6 @@ class MarketDataFetcher:
             print(f"⚠️ 日経公式VI取得失敗: {e}")
             import traceback
             traceback.print_exc()
-
-        # 優先順位2: 日経平均の20日ボラティリティを計算
-        try:
-            if not HAS_YFINANCE:
-                print("⚠️ yfinance がインストールされていません")
-                return {}
-
-            print("📊 日経平均の20日ボラティリティを計算...")
-            ticker = yf.Ticker(self.nikkei_symbol)
-            df = ticker.history(start=start_date, end=end_date + timedelta(days=1))
-
-            if not df.empty:
-                # 日経平均の20日ボラティリティを計算
-                returns = df["Close"].pct_change()
-                rolling_vol = returns.rolling(window=20).std() * np.sqrt(252) * 100
-
-                print(f"✅ 20日ボラティリティ計算成功（VI代替）")
-                vi_dict = {
-                    idx.date(): float(vol)
-                    for idx, vol in rolling_vol.items()
-                    if not np.isnan(vol)
-                }
-                return vi_dict
-
-        except Exception as e:
-            print(f"⚠️ ボラティリティ計算失敗: {e}")
 
         print("❌ VIデータが取得できませんでした")
         return {}

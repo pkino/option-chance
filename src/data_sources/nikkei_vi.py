@@ -51,13 +51,7 @@ class NikkeiVIFetcher:
         print(f"日経VIデータ取得: {start_date} 〜 {end_date}")
 
         try:
-            # 方法1: Yahoo Finance (yfinance経由)
-            vi_dict = self._fetch_from_yahoo_finance(start_date, end_date)
-            if vi_dict:
-                print(f"✅ 日経VI取得成功（Yahoo Finance）: {len(vi_dict)} 件")
-                return vi_dict
-
-            # 方法2: Investing.com
+            # 方法1: Investing.com
             vi_dict = self._fetch_from_investing_com(start_date, end_date)
             if vi_dict:
                 print(f"✅ 日経VI取得成功（Investing.com）: {len(vi_dict)} 件")
@@ -80,70 +74,6 @@ class NikkeiVIFetcher:
 
         except Exception as e:
             print(f"日経VI取得エラー: {e}")
-            return {}
-
-    def _fetch_from_yahoo_finance(
-        self, start_date: date, end_date: date
-    ) -> Dict[date, float]:
-        """Yahoo Financeから日経VIデータを取得"""
-        try:
-            print(f"  Yahoo Finance からVI取得試行...")
-
-            # yfinanceが使えない場合はスキップ
-            try:
-                import yfinance as yf
-            except ImportError:
-                print(f"  yfinanceがインストールされていません")
-                return {}
-
-            # 日経VIの可能性があるティッカーシンボル
-            vi_symbols = [
-                "^N225VI",   # 日経VI インデックス
-                "^VXN225",   # 別名
-                "1552.T",    # 日経VI先物ETF
-                "2038.T",    # NEXT FUNDS 日経平均VI先物指数ETF
-            ]
-
-            for symbol in vi_symbols:
-                try:
-                    print(f"    試行中: {symbol}")
-                    ticker = yf.Ticker(symbol)
-
-                    # 履歴データを取得
-                    df = ticker.history(start=start_date, end=end_date, interval="1d")
-
-                    if df.empty:
-                        print(f"      {symbol}: データなし")
-                        continue
-
-                    # 終値を取得
-                    vi_dict = {}
-                    for idx, row in df.iterrows():
-                        try:
-                            vi_date = idx.date() if hasattr(idx, 'date') else idx
-                            vi_value = float(row['Close'])
-
-                            # 日付範囲チェック
-                            if start_date <= vi_date <= end_date:
-                                vi_dict[vi_date] = vi_value
-                        except Exception:
-                            continue
-
-                    if vi_dict:
-                        print(f"      ✅ {symbol}: {len(vi_dict)} 件取得")
-                        return vi_dict
-                    else:
-                        print(f"      {symbol}: パース失敗")
-
-                except Exception as e:
-                    print(f"      {symbol}: エラー - {e}")
-                    continue
-
-            print(f"  Yahoo Finance: すべてのシンボルで失敗")
-            return {}
-
-        except Exception as e:
-            print(f"  Yahoo Finance取得エラー: {e}")
             return {}
 
     def _fetch_from_investing_com(

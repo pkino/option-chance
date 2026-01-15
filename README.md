@@ -16,11 +16,8 @@
 - ✅ **データソースの自動取得**
   - JPX（日本取引所グループ）からオプション理論価格を取得
   - **日経VI取得（マルチソース対応）** ⭐ NEW
-    - 優先順位1: Yahoo Finance（複数ティッカー試行：^N225VI, 1552.T, 2038.T等）
-    - 優先順位2: Investing.com（HTMLスクレイピング）
-    - 優先順位3: 日経公式サイト（CSV/HTML）
-    - 優先順位4: 20日ボラティリティ計算（確実に動作）
-  - Yahoo Financeから日経平均データを取得
+    - 優先順位1: Investing.com（HTMLスクレイピング）
+    - 優先順位2: 日経公式サイト（CSV/HTML）
   - J-Quants API（フォールバック、TODO）
 
 - ✅ **Slack通知**
@@ -42,9 +39,9 @@ option-chance/
 ├── src/
 │   ├── data_sources/       # データ取得
 │   │   ├── jpx.py         # JPXオプション理論価格
-│   │   ├── nikkei_vi.py   # 日経VI（YF → Investing.com → 日経公式 → 計算）
+│   │   ├── nikkei_vi.py   # 日経VI（Investing.com → 日経公式）
 │   │   ├── jquants.py     # J-Quants API（TODO）
-│   │   └── market_data.py # 日経平均・VI統合（20日ボラ計算含む）
+│   │   └── market_data.py # 日経平均・VI統合
 │   ├── indicators/        # テクニカル指標
 │   │   └── technical.py   # RSI, MACD, BB等
 │   ├── signals/           # シグナル判定
@@ -238,20 +235,18 @@ GitHubリポジトリの Settings > Secrets and variables > Actions で以下を
 - ローカル環境で `ProxyError` や `403 Forbidden` エラー
 - `Tunnel connection failed: 403 Forbidden`
 - GHA環境で `ImportError: Missing optional dependency 'lxml'`（修正済み）
-- Yahoo Finance: `404 Not Found` または `データなし`
 - Investing.com: `見つかったデータテーブル: 0 件`（JavaScript動的読み込みの可能性）
 
 **原因**:
 - ローカル環境のプロキシ・ファイアウォール制限
 - 日経公式サイトのbot保護
 - pandas.read_html()に必要な`lxml`/`html5lib`パッケージの不足（修正済み）
-- Yahoo Financeに日経VIティッカーが存在しない可能性
 - Investing.comがJavaScriptで動的にデータを読み込む仕様
 
 **解決策**:
 1. **マルチソース戦略**（実装済み）
    - 複数のデータソースを順次試行
-   - Yahoo Finance → Investing.com → 日経公式 → 20日ボラ計算
+   - Investing.com → 日経公式
    - いずれかが成功すればVI取得完了
 
 2. **依存関係の確認**（重要）
@@ -264,21 +259,9 @@ GitHubリポジトリの Settings > Secrets and variables > Actions で以下を
    - 自動スケジュール実行（18:00 JST）で運用
    - デバッグログで各データソースの結果を確認
 
-4. **20日ボラティリティ計算（最終フォールバック）**
-   - システムは自動的に代替手段に切り替え
-   - Yahoo FinanceのN225データから計算
-   - 公式VIと相関が高く、実用上問題なし
-   - 確実に動作する
-
-5. **VPN・プロキシ設定変更**
+4. **VPN・プロキシ設定変更**
    - 企業ネットワーク等でブロックされている場合
    - ネットワーク管理者に確認
-
-**問題**: 日経平均データ取得失敗
-
-**解決策**:
-- Yahoo Financeのアクセス制限を確認
-- 別のデータソースを検討
 
 ### Slack通知が届かない
 
