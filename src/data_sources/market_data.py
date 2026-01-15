@@ -2,33 +2,24 @@
 from datetime import datetime, date, timedelta
 from typing import List, Optional
 import pandas as pd
-import numpy as np
-
-try:
-    import yfinance as yf
-
-    HAS_YFINANCE = True
-except ImportError:
-    HAS_YFINANCE = False
-    print("警告: yfinance がインストールされていません")
 
 from ..models.option import MarketData
 from .nikkei_vi import NikkeiVIFetcher
+from .nikkei_225 import Nikkei225Fetcher
 
 
 class MarketDataFetcher:
     """市場データの取得"""
 
     def __init__(self):
-        self.nikkei_symbol = "^N225"  # 日経平均
-        self.vi_symbol = "^VXN225"  # 日経VI（実際のシンボルを要確認）
-        self.nikkei_vi_fetcher = NikkeiVIFetcher()  # 日経公式VI取得
+        self.nikkei_vi_fetcher = NikkeiVIFetcher()  # 日経VI取得
+        self.nikkei_225_fetcher = Nikkei225Fetcher()  # 日経平均取得
 
     def fetch_nikkei_data(
         self, start_date: date, end_date: Optional[date] = None
     ) -> List[MarketData]:
         """
-        日経平均のデータを取得
+        日経平均のデータを取得（日経公式サイト/Investing.comから取得）
 
         Args:
             start_date: 開始日
@@ -37,46 +28,27 @@ class MarketDataFetcher:
         Returns:
             MarketDataのリスト
         """
-        if not HAS_YFINANCE:
-            raise ImportError(
-                "yfinance が必要です: pip install yfinance でインストールしてください"
-            )
-
         if end_date is None:
             end_date = date.today()
 
-        print(f"日経平均データ取得: {start_date} 〜 {end_date}")
-
         try:
-            # Yahoo Financeから取得
-            ticker = yf.Ticker(self.nikkei_symbol)
-            df = ticker.history(start=start_date, end=end_date + timedelta(days=1))
+            market_data = self.nikkei_225_fetcher.fetch_nikkei_data(start_date, end_date)
 
-            if df.empty:
-                raise ValueError("データが取得できませんでした")
-
-            # MarketDataに変換
-            market_data = []
-            for idx, row in df.iterrows():
-                data = MarketData(
-                    date=idx.date(),
-                    open=float(row["Open"]),
-                    high=float(row["High"]),
-                    low=float(row["Low"]),
-                    close=float(row["Close"]),
-                    volume=int(row["Volume"]) if row["Volume"] > 0 else None,
-                )
-                market_data.append(data)
-
-            print(f"取得完了: {len(market_data)} 件")
-            return market_data
+            if market_data:
+                print(f"✅ 取得完了: {len(market_data)} 件")
+                return market_data
+            else:
+                print("⚠️ 日経平均データが取得できませんでした")
+                return []
 
         except Exception as e:
-            print(f"日経平均データ取得エラー: {e}")
+            print(f"❌ 日経平均データ取得エラー: {e}")
+            import traceback
+            traceback.print_exc()
             raise
 
     def fetch_vi_data(
-        self, start_date: date, end_date: Optional[date] = None
+        self, start_date: date, end_date: Optional[date] = None, market_data: Optional[List[MarketData]] = None
     ) -> dict[date, float]:
         """
         日経VIのデータを取得（優先順位：日経公式→20日ボラティリティ計算）
@@ -84,6 +56,7 @@ class MarketDataFetcher:
         Args:
             start_date: 開始日
             end_date: 終了日（Noneの場合は今日）
+            market_data: 既に取得した日経平均データ（20日ボラ計算用）
 
         Returns:
             {date: vi_value} の辞書
@@ -101,37 +74,30 @@ class MarketDataFetcher:
                 print(f"✅ 日経公式VI取得成功: {len(vi_dict)} 件")
                 return vi_dict
             else:
-                print("⚠️ 日経公式VI: 空のデータが返されました（データソースにデータがない可能性）")
+                print("⚠️ 日経公式VI: 空のデータが返されました")
         except Exception as e:
             print(f"⚠️ 日経公式VI取得失敗: {e}")
-            import traceback
-            traceback.print_exc()
 
         # 優先順位2: 日経平均の20日ボラティリティを計算
-        try:
-            if not HAS_YFINANCE:
-                print("⚠️ yfinance がインストールされていません")
-                return {}
-
-            print("📊 日経平均の20日ボラティリティを計算...")
-            ticker = yf.Ticker(self.nikkei_symbol)
-            df = ticker.history(start=start_date, end=end_date + timedelta(days=1))
-
-            if not df.empty:
-                # 日経平均の20日ボラティリティを計算
-                returns = df["Close"].pct_change()
-                rolling_vol = returns.rolling(window=20).std() * np.sqrt(252) * 100
-
-                print(f"✅ 20日ボラティリティ計算成功（VI代替）")
-                vi_dict = {
-                    idx.date(): float(vol)
-                    for idx, vol in rolling_vol.items()
-                    if not np.isnan(vol)
-                }
+        print("📊 20日ボラティリティ計算にフォールバック...")
+        if market_data and len(market_data) > 0:
+            vi_dict = self.nikkei_225_fetcher.calculate_20day_volatility(market_data)
+            if vi_dict and len(vi_dict) > 0:
+                print(f"✅ 20日ボラティリティ計算成功: {len(vi_dict)} 件")
                 return vi_dict
-
-        except Exception as e:
-            print(f"⚠️ ボラティリティ計算失敗: {e}")
+        else:
+            print("⚠️ 日経平均データがないため、20日ボラティリティを計算できません")
+            # market_dataがない場合は日経平均データを取得
+            try:
+                print("  日経平均データを取得して再試行...")
+                nikkei_data = self.fetch_nikkei_data(start_date, end_date)
+                if nikkei_data and len(nikkei_data) > 0:
+                    vi_dict = self.nikkei_225_fetcher.calculate_20day_volatility(nikkei_data)
+                    if vi_dict and len(vi_dict) > 0:
+                        print(f"✅ 20日ボラティリティ計算成功: {len(vi_dict)} 件")
+                        return vi_dict
+            except Exception as e:
+                print(f"⚠️ 日経平均データ取得・ボラティリティ計算失敗: {e}")
 
         print("❌ VIデータが取得できませんでした")
         return {}
@@ -152,8 +118,8 @@ class MarketDataFetcher:
         # 日経平均データを取得
         market_data = self.fetch_nikkei_data(start_date, end_date)
 
-        # VIデータを取得
-        vi_dict = self.fetch_vi_data(start_date, end_date)
+        # VIデータを取得（日経平均データを渡して20日ボラ計算に利用）
+        vi_dict = self.fetch_vi_data(start_date, end_date, market_data=market_data)
 
         # VIをマージ
         for data in market_data:
