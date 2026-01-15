@@ -20,7 +20,6 @@
   - **日経VI（ボラティリティ・インデックス）** ⭐ NEW
     - 日経公式CSV（直接ダウンロード・無料・公式）
     - フォールバック: 日経平均から20日ボラティリティを計算（年率化）
-  - J-Quants API（フォールバック、TODO）
 
 - ✅ **Slack通知**
   - エントリーシグナル検出時に自動通知
@@ -43,7 +42,6 @@ option-chance/
 │   │   ├── jpx.py         # JPXオプション理論価格
 │   │   ├── nikkei_225.py  # 日経平均（日経公式CSV）
 │   │   ├── nikkei_vi.py   # 日経VI（日経公式CSV）
-│   │   ├── jquants.py     # J-Quants API（TODO）
 │   │   └── market_data.py # 日経平均・VI統合（20日ボラ計算含む）
 │   ├── indicators/        # テクニカル指標
 │   │   └── technical.py   # RSI, MACD, BB等
