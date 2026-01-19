@@ -189,7 +189,7 @@ class SignalDetector:
         self.df = df
         self.config = config
 
-    def detect_gate_vi(self, idx: int) -> bool:
+    def detect_gate_vi(self, idx: int) -> tuple[bool, dict]:
         """
         Gate① VI安定条件をチェック
 
@@ -197,19 +197,26 @@ class SignalDetector:
             idx: DataFrameのインデックス
 
         Returns:
-            条件を満たすか
+            (条件を満たすか, 詳細情報)
         """
         if idx < 0 or idx >= len(self.df):
-            return False
+            return False, {}
 
         row = self.df.iloc[idx]
 
         # VIデータがない場合はGate①をスキップ（Trueを返して続行）
         # 日経平均の20日ボラティリティから生成されるため、初期期間以外は通常存在する
         if pd.isna(row.get("vi")) or pd.isna(row.get("vi_ma_10")):
-            return True
+            return True, {}
 
         config = self.config["gate_vi"]
+
+        vi_values = {
+            "vi": float(row["vi"]) if not pd.isna(row["vi"]) else None,
+            "vi_ma_10": float(row["vi_ma_10"]) if not pd.isna(row["vi_ma_10"]) else None,
+            "vi_std_10": float(row["vi_std_10"]) if not pd.isna(row["vi_std_10"]) else None,
+            "vi_slope_10": float(row["vi_slope_10"]) if not pd.isna(row["vi_slope_10"]) else None,
+        }
 
         conditions = [
             row["vi"] <= config["vi_threshold"],
@@ -218,7 +225,7 @@ class SignalDetector:
             row["vi_slope_10"] <= config["vi_10d_slope_threshold"],
         ]
 
-        return all(conditions)
+        return all(conditions), vi_values
 
     def detect_gate_top_a(self, idx: int) -> tuple[bool, dict]:
         """
@@ -239,24 +246,32 @@ class SignalDetector:
         signals = {}
 
         # A1: RSI過熱→反転
-        signals["a1_rsi_reversal"] = self._check_rsi_reversal(idx)
+        a1_result, a1_values = self._check_rsi_reversal(idx)
+        signals["a1_rsi_reversal"] = a1_result
+        signals["a1_values"] = a1_values
 
         # A2: MACD弱化
-        signals["a2_macd_weakening"] = self._check_macd_weakening(idx)
+        a2_result, a2_values = self._check_macd_weakening(idx)
+        signals["a2_macd_weakening"] = a2_result
+        signals["a2_values"] = a2_values
 
         # A3: ダイバージェンス
-        signals["a3_divergence"] = self._check_divergence(idx)
+        a3_result, a3_values = self._check_divergence(idx)
+        signals["a3_divergence"] = a3_result
+        signals["a3_values"] = a3_values
 
         # A4: 伸び切り（ボリンジャー）
-        signals["a4_overbought"] = self._check_overbought(idx)
+        a4_result, a4_values = self._check_overbought(idx)
+        signals["a4_overbought"] = a4_result
+        signals["a4_values"] = a4_values
 
         # 2つ以上の条件が成立
-        true_count = sum(signals.values())
+        true_count = sum([a1_result, a2_result, a3_result, a4_result])
         is_satisfied = true_count >= config["required_conditions"]
 
         return is_satisfied, signals
 
-    def _check_rsi_reversal(self, idx: int) -> bool:
+    def _check_rsi_reversal(self, idx: int) -> tuple[bool, dict]:
         """A1: RSI過熱→反転"""
         config = self.config["gate_top"]["technical"]["rsi"]
 
@@ -266,87 +281,129 @@ class SignalDetector:
 
         rsi_past = self.df.iloc[max(0, idx - lookback) : idx + 1]["rsi"]
         reached_overbought = (rsi_past >= overbought_threshold).any()
+        rsi_max_5d = float(rsi_past.max()) if len(rsi_past) > 0 else None
+
+        values = {
+            "rsi_max_5d": rsi_max_5d,
+            "reached_overbought": reached_overbought,
+        }
 
         if not reached_overbought:
-            return False
+            return False, values
 
         # RSIが2日連続で低下
         if idx < 2:
-            return False
+            return False, values
 
-        rsi_current = self.df.iloc[idx]["rsi"]
-        rsi_1d_ago = self.df.iloc[idx - 1]["rsi"]
-        rsi_2d_ago = self.df.iloc[idx - 2]["rsi"]
+        rsi_current = float(self.df.iloc[idx]["rsi"])
+        rsi_1d_ago = float(self.df.iloc[idx - 1]["rsi"])
+        rsi_2d_ago = float(self.df.iloc[idx - 2]["rsi"])
+
+        values.update({
+            "rsi_current": rsi_current,
+            "rsi_1d_ago": rsi_1d_ago,
+            "rsi_2d_ago": rsi_2d_ago,
+        })
 
         consecutive_decline = rsi_current < rsi_1d_ago < rsi_2d_ago
 
-        return consecutive_decline
+        return consecutive_decline, values
 
-    def _check_macd_weakening(self, idx: int) -> bool:
+    def _check_macd_weakening(self, idx: int) -> tuple[bool, dict]:
         """A2: MACD弱化"""
         if idx < 3:
-            return False
+            return False, {}
 
         config = self.config["gate_top"]["technical"]["macd"]
 
         row = self.df.iloc[idx]
 
+        macd = float(row["macd"])
+        hist_current = float(self.df.iloc[idx]["macd_hist"])
+        hist_1d = float(self.df.iloc[idx - 1]["macd_hist"])
+        hist_2d = float(self.df.iloc[idx - 2]["macd_hist"])
+
+        values = {
+            "macd": macd,
+            "macd_hist_current": hist_current,
+            "macd_hist_1d": hist_1d,
+            "macd_hist_2d": hist_2d,
+        }
+
         # MACDラインが高位（> 0）
         if row["macd"] <= 0:
-            return False
+            return False, values
 
         # ヒストグラムが3日連続で縮小
-        hist_current = self.df.iloc[idx]["macd_hist"]
-        hist_1d = self.df.iloc[idx - 1]["macd_hist"]
-        hist_2d = self.df.iloc[idx - 2]["macd_hist"]
-
         consecutive_decline = hist_current < hist_1d < hist_2d
 
-        return consecutive_decline
+        return consecutive_decline, values
 
-    def _check_divergence(self, idx: int) -> bool:
+    def _check_divergence(self, idx: int) -> tuple[bool, dict]:
         """A3: ダイバージェンス"""
         config = self.config["gate_top"]["technical"]["divergence"]
         lookback = config["lookback_days"]
 
         if idx < lookback:
-            return False
+            return False, {}
 
         row = self.df.iloc[idx]
+
+        close = float(row["close"])
+        high_20 = float(row["high_20"])
+        current_rsi = float(row["rsi"])
 
         # 価格が直近20営業日高値を更新
         is_new_price_high = row["close"] >= row["high_20"]
 
-        if not is_new_price_high:
-            return False
-
         # RSIは直近20営業日高値を更新しない
         rsi_window = self.df.iloc[max(0, idx - lookback) : idx]["rsi"]
-        max_rsi_past = rsi_window.max()
-        current_rsi = row["rsi"]
+        max_rsi_past = float(rsi_window.max()) if len(rsi_window) > 0 else None
 
-        rsi_not_new_high = current_rsi < max_rsi_past
+        values = {
+            "close": close,
+            "high_20": high_20,
+            "rsi_current": current_rsi,
+            "rsi_max_20d": max_rsi_past,
+            "is_new_price_high": is_new_price_high,
+        }
 
-        return rsi_not_new_high
+        if not is_new_price_high:
+            return False, values
 
-    def _check_overbought(self, idx: int) -> bool:
+        rsi_not_new_high = current_rsi < max_rsi_past if max_rsi_past else False
+
+        return rsi_not_new_high, values
+
+    def _check_overbought(self, idx: int) -> tuple[bool, dict]:
         """A4: 伸び切り（ボリンジャー上限突破 + 陰線/上ヒゲ）"""
         row = self.df.iloc[idx]
+
+        close = float(row["close"])
+        bb_upper = float(row["bb_upper"])
+        upper_wick_ratio = float(row["upper_wick_ratio"])
+        is_bearish = row["close"] < row["open"]
+
+        values = {
+            "close": close,
+            "bb_upper": bb_upper,
+            "upper_wick_ratio": upper_wick_ratio,
+            "is_bearish": bool(is_bearish),
+        }
 
         # ボリンジャーバンド上限を上回る
         above_upper_band = row["close"] > row["bb_upper"]
 
         if not above_upper_band:
-            return False
+            return False, values
 
         # 陰線 OR 上ヒゲが長い
         config = self.config["gate_top"]["technical"]["bollinger"]
         wick_threshold = config["upper_wick_ratio"]
 
-        is_bearish = row["close"] < row["open"]
         has_long_upper_wick = row["upper_wick_ratio"] >= wick_threshold
 
-        return is_bearish or has_long_upper_wick
+        return is_bearish or has_long_upper_wick, values
 
     def detect_gate_top_b(self, idx: int) -> tuple[bool, dict]:
         """
@@ -366,29 +423,43 @@ class SignalDetector:
         signals = {}
 
         # B1: 高値圏の出来高失速
-        signals["b1_volume_failure"] = self._check_volume_failure(idx)
+        b1_result, b1_values = self._check_volume_failure(idx)
+        signals["b1_volume_failure"] = b1_result
+        signals["b1_values"] = b1_values
 
         # B2: 上ヒゲ優勢
-        signals["b2_upper_wick_dominance"] = self._check_upper_wick_dominance(idx)
+        b2_result, b2_values = self._check_upper_wick_dominance(idx)
+        signals["b2_upper_wick_dominance"] = b2_result
+        signals["b2_values"] = b2_values
 
         # B3: ギャップアップ失速
-        signals["b3_gap_up_failure"] = self._check_gap_up_failure(idx)
+        b3_result, b3_values = self._check_gap_up_failure(idx)
+        signals["b3_gap_up_failure"] = b3_result
+        signals["b3_values"] = b3_values
 
         # 1つ以上の条件が成立
-        true_count = sum(signals.values())
+        true_count = sum([b1_result, b2_result, b3_result])
         is_satisfied = true_count >= config["required_conditions"]
 
         return is_satisfied, signals
 
-    def _check_volume_failure(self, idx: int) -> bool:
+    def _check_volume_failure(self, idx: int) -> tuple[bool, dict]:
         """B1: 高値圏の出来高失速"""
         row = self.df.iloc[idx]
 
         # 出来高データがない場合はFalse
         if pd.isna(row.get("volume_ratio")):
-            return False
+            return False, {}
 
         config = self.config["gate_top"]["supply_demand"]["volume_failure"]
+
+        volume_ratio = float(row["volume_ratio"])
+        distance_from_high_20_pct = float(row["distance_from_high_20_pct"])
+
+        values = {
+            "volume_ratio": volume_ratio,
+            "distance_from_high_20_pct": distance_from_high_20_pct,
+        }
 
         # 出来高比率の低下
         volume_declining = row["volume_ratio"] <= config["ratio_threshold"]
@@ -396,9 +467,9 @@ class SignalDetector:
         # 高値圏（直近20営業日高値の99%以内）
         in_high_range = row["distance_from_high_20_pct"] >= (config["high_proximity"] - 1) * 100
 
-        return volume_declining and in_high_range
+        return volume_declining and in_high_range, values
 
-    def _check_upper_wick_dominance(self, idx: int) -> bool:
+    def _check_upper_wick_dominance(self, idx: int) -> tuple[bool, dict]:
         """B2: 上ヒゲ優勢"""
         config = self.config["gate_top"]["supply_demand"]["upper_wick"]
         lookback = config["lookback_days"]
@@ -407,26 +478,33 @@ class SignalDetector:
         close_from_high = config["close_from_high"]
 
         if idx < lookback:
-            return False
+            return False, {}
 
         # 直近3日分を取得
         recent_df = self.df.iloc[idx - lookback + 1 : idx + 1]
 
         # 条件を満たす日数をカウント
         condition_met_days = 0
+        upper_wick_ratios = []
         for _, row in recent_df.iterrows():
+            upper_wick_ratios.append(float(row["upper_wick_ratio"]))
             has_long_upper_wick = row["upper_wick_ratio"] >= wick_ratio
             closed_below_high = row["close"] <= row["high"] * close_from_high
 
             if has_long_upper_wick and closed_below_high:
                 condition_met_days += 1
 
-        return condition_met_days >= required_days
+        values = {
+            "upper_wick_days_count": condition_met_days,
+            "upper_wick_ratios": upper_wick_ratios,
+        }
 
-    def _check_gap_up_failure(self, idx: int) -> bool:
+        return condition_met_days >= required_days, values
+
+    def _check_gap_up_failure(self, idx: int) -> tuple[bool, dict]:
         """B3: ギャップアップ失速"""
         if idx < 1:
-            return False
+            return False, {}
 
         row = self.df.iloc[idx]
         prev_row = self.df.iloc[idx - 1]
@@ -434,13 +512,25 @@ class SignalDetector:
         config = self.config["gate_top"]["supply_demand"]["gap_up_failure"]
         gap_threshold = config["gap_threshold"]
 
+        open_price = float(row["open"])
+        close_price = float(row["close"])
+        prev_high = float(prev_row["high"])
+        gap_pct = ((open_price / prev_high) - 1) * 100 if prev_high > 0 else 0
+
+        values = {
+            "open": open_price,
+            "close": close_price,
+            "prev_high": prev_high,
+            "gap_pct": gap_pct,
+        }
+
         # ギャップアップ
         has_gap_up = row["open"] >= prev_row["high"] * gap_threshold
 
         # 寄り天（終値 <= 始値）
         failed_to_hold = row["close"] <= row["open"]
 
-        return has_gap_up and failed_to_hold
+        return has_gap_up and failed_to_hold, values
 
     def detect_gate_top_c(self, idx: int, events: List[str] = []) -> tuple[bool, dict]:
         """
@@ -462,34 +552,48 @@ class SignalDetector:
         signals = {}
 
         # C1: イベント近接
-        signals["c1_event_proximity"] = self._check_event_proximity(
+        c1_result, c1_values = self._check_event_proximity(
             current_date, events, lookforward_days
         )
+        signals["c1_event_proximity"] = c1_result
+        signals["c1_values"] = c1_values
 
         # C2, C3は実装が難しいため、将来的に追加
         signals["c2_macro_headwind"] = False
+        signals["c2_values"] = {}
         signals["c3_valuation_expensive"] = False
+        signals["c3_values"] = {}
 
         # 1つ以上の条件が成立
-        is_satisfied = any(signals.values())
+        is_satisfied = any([c1_result, False, False])
 
         return is_satisfied, signals
 
     def _check_event_proximity(
         self, current_date: pd.Timestamp, events: List[str], lookforward_days: int
-    ) -> bool:
+    ) -> tuple[bool, dict]:
         """イベント近接チェック"""
         if not events:
-            return False
+            return False, {}
 
         event_dates = [pd.to_datetime(e) for e in events]
+
+        nearest_event = None
+        min_days = float('inf')
 
         for event_date in event_dates:
             days_until_event = (event_date - current_date).days
             if 0 <= days_until_event <= lookforward_days:
-                return True
+                if days_until_event < min_days:
+                    min_days = days_until_event
+                    nearest_event = event_date.strftime('%Y-%m-%d')
 
-        return False
+        values = {
+            "nearest_event_date": nearest_event,
+            "days_until_event": int(min_days) if min_days != float('inf') else None,
+        }
+
+        return nearest_event is not None, values
 
     def detect_trigger(self, idx: int) -> tuple[bool, dict]:
         """
@@ -507,6 +611,10 @@ class SignalDetector:
         row = self.df.iloc[idx]
         prev_row = self.df.iloc[idx - 1]
 
+        close = float(row["close"])
+        prev_low = float(prev_row["low"])
+        ma_5 = float(row.get("ma_5", float("inf")))
+
         signals = {}
 
         # 前日安値割れ（終値ベース）
@@ -514,6 +622,12 @@ class SignalDetector:
 
         # 5日MA割れ（終値）
         signals["ma5_break"] = row["close"] < row.get("ma_5", float("inf"))
+
+        signals["values"] = {
+            "close": close,
+            "prev_low": prev_low,
+            "ma_5": ma_5 if ma_5 != float("inf") else None,
+        }
 
         # どちらか1つでも成立
         is_satisfied = signals["prev_low_break"] or signals["ma5_break"]
