@@ -114,6 +114,8 @@ class DailyEntryChecker:
                 print(f"    - Gate② (A): {latest_signal.gate_top_a}")
                 print(f"    - Gate② (B): {latest_signal.gate_top_b}")
                 print(f"    - Trigger③: {latest_signal.trigger}")
+                print("\n  詳細:")
+                print(format_signal_for_notification(latest_signal))
 
                 if self.slack_notifier and send_no_signal:
                     self.slack_notifier.send_no_signal(str(latest_signal.date))
