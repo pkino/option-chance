@@ -11,9 +11,11 @@ option_selection:
   premium_range:
     min: 20  # 円
     max: 40  # 円
-  dte_range:  # Days To Expiration (営業日)
-    min: 10
-    max: 30
+  dte_range:  # Days To Expiration (営業日) ≒ 暦日25〜40日
+    # セータの毒が回る前に決着をつけるため、残存期間を絞る
+    # 短すぎ（<18d）はセータが急激に加速、長すぎ（>28d）はベガ感応度が鈍い
+    min: 18
+    max: 28
   delta_range:
     min: -0.40
     max: -0.25
@@ -112,6 +114,9 @@ risk_management:
   max_loss_pct: 0.005  # 口座資産の0.5%（0.3〜0.7%）
   max_positions: 2  # 同時保有最大2本
   no_averaging_down: True  # ナンピン禁止
+  # 踏み上げ相場での資金枯渇防止：直近エントリーからN営業日は新規エントリー抑制
+  # 「今回こそ暴落だ」と小刻みに全損を繰り返す前に、本物の暴落への弾丸を温存する
+  entry_cooldown_days: 5
 
 # バックテスト設定
 backtest:

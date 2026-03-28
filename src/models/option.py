@@ -119,9 +119,31 @@ class Signal:
         return self.gate_top_a and self.gate_top_b
 
     @property
+    def is_probe_signal(self) -> bool:
+        """打診シグナル（Gate① AND Gate②、Trigger③不要）
+        IVが低い「嵐の前の静けさ」の段階で仕込む早期エントリー用。
+        Triggerを待つと発動時にIVが跳ね上がりプレミアムが高騰するリスクへの対応。
+        """
+        return self.gate_vi and self.gate_top and not self.trigger
+
+    @property
     def is_entry_signal(self) -> bool:
-        """エントリーシグナルか（Gate① AND Gate② AND Trigger）"""
+        """確認済みエントリーシグナル（Gate① AND Gate② AND Trigger③）"""
         return self.gate_vi and self.gate_top and self.trigger
+
+    @property
+    def is_supply_dominant_entry(self) -> bool:
+        """需給主導型エントリー（Gate②A不要、Gate②Bに2条件以上 AND Trigger③）
+        テクニカル指標が「強気」を示す中で突発的な需給崩壊が起きるケースに対応。
+        過剰最適化（ANDの重ねすぎ）で取りこぼす急落を捉えるための補完シグナル。
+        """
+        b_details = self.details.get("gate_top_b", {})
+        b_count = sum([
+            bool(b_details.get("b1_volume_failure", False)),
+            bool(b_details.get("b2_upper_wick_dominance", False)),
+            bool(b_details.get("b3_gap_up_failure", False)),
+        ])
+        return self.gate_vi and b_count >= 2 and self.trigger
 
     @property
     def is_strong_signal(self) -> bool:
