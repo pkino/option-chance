@@ -39,12 +39,32 @@ class GateChecker:
         # SignalDetectorを初期化
         detector = SignalDetector(df, self.config)
 
+        # クールダウン設定（踏み上げ相場での連続エントリーによる資金枯渇防止）
+        cooldown_days = self.config.get("risk_management", {}).get("entry_cooldown_days", 0)
+        last_entry_date = None
+
         # 各日についてシグナルをチェック
         signals = []
         for idx in range(len(df)):
             signal = self._check_single_date(df, idx, detector, events)
-            if signal:
-                signals.append(signal)
+            if signal is None:
+                continue
+
+            # クールダウン中はエントリーシグナルと需給主導シグナルを抑制
+            # （打診シグナルは情報として残す）
+            if cooldown_days > 0 and last_entry_date is not None:
+                days_since_last = (signal.date - last_entry_date).days
+                if days_since_last < cooldown_days:
+                    if signal.is_entry_signal or signal.is_supply_dominant_entry:
+                        signal.details["cooldown_suppressed"] = True
+                        signal.details["days_since_last_entry"] = days_since_last
+
+            signals.append(signal)
+
+            # エントリーシグナルが発火した日を記録
+            if signal.is_entry_signal or signal.is_supply_dominant_entry:
+                if not signal.details.get("cooldown_suppressed"):
+                    last_entry_date = signal.date
 
         return signals
 
@@ -117,7 +137,7 @@ class GateChecker:
 
     def get_entry_signals(self, signals: List[Signal]) -> List[Signal]:
         """
-        エントリーシグナルのみを抽出
+        エントリーシグナルのみを抽出（クールダウン中のシグナルを除外）
 
         Args:
             signals: 全シグナルのリスト
@@ -125,7 +145,40 @@ class GateChecker:
         Returns:
             エントリーシグナルのみのリスト
         """
-        return [s for s in signals if s.is_entry_signal]
+        return [
+            s for s in signals
+            if s.is_entry_signal and not s.details.get("cooldown_suppressed")
+        ]
+
+    def get_probe_signals(self, signals: List[Signal]) -> List[Signal]:
+        """
+        打診シグナルを抽出（Gate①+②成立、Trigger③未発火）
+
+        IVが低い段階での早期仕込み用。Triggerを待つとIV高騰でプレミアムが
+        高くなりすぎるリスクへの対応。ポジションサイズは通常の半分程度に抑える。
+
+        Args:
+            signals: 全シグナルのリスト
+
+        Returns:
+            打診シグナルのみのリスト
+        """
+        return [s for s in signals if s.is_probe_signal]
+
+    def get_supply_dominant_signals(self, signals: List[Signal]) -> List[Signal]:
+        """
+        需給主導型シグナルを抽出（Gate②A不要、Gate②Bに2条件以上）
+
+        テクニカル指標が強気を示す中での突発的需給崩壊（過剰最適化で取りこぼす急落）に対応。
+        RSI過熱やMACDの弱化を待っていると「買えないほど高い価格」になるケースへの補完。
+
+        Args:
+            signals: 全シグナルのリスト
+
+        Returns:
+            需給主導型エントリーシグナルのみのリスト
+        """
+        return [s for s in signals if s.is_supply_dominant_entry]
 
     def get_strong_signals(self, signals: List[Signal]) -> List[Signal]:
         """
