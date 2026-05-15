@@ -137,6 +137,7 @@ class TechnicalIndicators:
         # 直近高値・安値からの距離
         df["high_20"] = df["high"].rolling(window=20).max()
         df["low_20"] = df["low"].rolling(window=20).min()
+        df["close_max_20"] = df["close"].rolling(window=20).max()  # ダイバージェンス判定用
         df["distance_from_high_20_pct"] = ((df["close"] - df["high_20"]) / df["high_20"]) * 100
         df["distance_from_low_20_pct"] = ((df["close"] - df["low_20"]) / df["low_20"]) * 100
 
@@ -340,7 +341,13 @@ class SignalDetector:
         return consecutive_decline, values
 
     def _check_divergence(self, idx: int) -> tuple[bool, dict]:
-        """A3: ダイバージェンス"""
+        """A3: 弱気ダイバージェンス（価格は高値圏、RSIは前回高値を下回る）
+
+        修正経緯: 旧実装は close >= max(high) を条件にしていたため終値が
+        直近20日のローソク高値の最大値を上回ることを要求しており、構造上
+        ほぼ成立しなかった。正しくは「終値が直近20日の終値最高値に近いか
+        どうか」で高値圏を判定する。
+        """
         config = self.config["gate_top"]["technical"]["divergence"]
         lookback = config["lookback_days"]
 
@@ -350,28 +357,29 @@ class SignalDetector:
         row = self.df.iloc[idx]
 
         close = float(row["close"])
-        high_20 = float(row["high_20"])
+        # 直近20日の終値最高値（high_20はhigh列の最大値なのでclose比較には不適）
+        close_max_20 = float(row["close_max_20"]) if not pd.isna(row.get("close_max_20")) else float(row["high_20"])
         current_rsi = float(row["rsi"])
 
-        # 価格が直近20営業日高値を更新
-        is_new_price_high = row["close"] >= row["high_20"]
+        # 価格が直近20営業日の高値圏（終値ベース最高値の98%以上）
+        is_near_price_high = close >= close_max_20 * 0.98
 
-        # RSIは直近20営業日高値を更新しない
         rsi_window = self.df.iloc[max(0, idx - lookback) : idx]["rsi"]
         max_rsi_past = float(rsi_window.max()) if len(rsi_window) > 0 else None
 
         values = {
             "close": close,
-            "high_20": high_20,
+            "close_max_20": close_max_20,
             "rsi_current": current_rsi,
             "rsi_max_20d": max_rsi_past,
-            "is_new_price_high": is_new_price_high,
+            "is_near_price_high": is_near_price_high,
         }
 
-        if not is_new_price_high:
+        if not is_near_price_high:
             return False, values
 
-        rsi_not_new_high = current_rsi < max_rsi_past if max_rsi_past else False
+        # RSIが過去20日の最高値を更新できていない（弱気ダイバージェンス）
+        rsi_not_new_high = (current_rsi < max_rsi_past) if max_rsi_past else False
 
         return rsi_not_new_high, values
 
