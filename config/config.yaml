@@ -26,13 +26,13 @@ gate_vi:
   vi_threshold: 20
   vi_10d_avg_threshold: 20
   vi_10d_std_threshold: 1.5
-  vi_10d_slope_threshold: 0
+  vi_10d_slope_threshold: 0.1  # 0→0.1: 微上昇局面も許容（横ばい~緩やかな上昇を除外しない）
 
 # Gate② 天井示唆条件
 gate_top:
-  # A. テクニカル（4条件のうち2つ以上）
+  # A. テクニカル（4条件のうち1つ以上）
   technical:
-    required_conditions: 2
+    required_conditions: 1  # 2→1: 複数のフィルタが独立して機能するため1条件でも十分な精度
 
     # A1: RSI過熱→反転
     rsi:
