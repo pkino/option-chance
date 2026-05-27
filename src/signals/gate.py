@@ -193,6 +193,13 @@ class GateChecker:
         return [s for s in signals if s.is_strong_signal]
 
 
+def _fmt(val, spec: str) -> str:
+    """数値なら format(val, spec)、それ以外は str(val) を返す。"""
+    if isinstance(val, (int, float)):
+        return format(val, spec)
+    return str(val)
+
+
 def format_signal_for_notification(signal: Signal) -> str:
     """
     シグナルを通知用にフォーマット
@@ -223,32 +230,32 @@ def format_signal_for_notification(signal: Signal) -> str:
     details_a = signal.details.get("gate_top_a", {})
     if details_a.get("a1_rsi_reversal"):
         a1_vals = details_a.get("a1_values", {})
-        lines.append(f"     A1(RSI反転): RSI={a1_vals.get('rsi_current', 'N/A'):.1f}, "
-                    f"1d前={a1_vals.get('rsi_1d_ago', 'N/A'):.1f}, 2d前={a1_vals.get('rsi_2d_ago', 'N/A'):.1f}, "
-                    f"5d最大={a1_vals.get('rsi_max_5d', 'N/A'):.1f}")
+        lines.append(f"     A1(RSI反転): RSI={_fmt(a1_vals.get('rsi_current', 'N/A'), '.1f')}, "
+                    f"1d前={_fmt(a1_vals.get('rsi_1d_ago', 'N/A'), '.1f')}, 2d前={_fmt(a1_vals.get('rsi_2d_ago', 'N/A'), '.1f')}, "
+                    f"5d最大={_fmt(a1_vals.get('rsi_max_5d', 'N/A'), '.1f')}")
     if details_a.get("a2_macd_weakening"):
         a2_vals = details_a.get("a2_values", {})
-        lines.append(f"     A2(MACD弱化): MACD={a2_vals.get('macd', 'N/A'):.2f}, "
-                    f"Hist={a2_vals.get('macd_hist_current', 'N/A'):.2f}, "
-                    f"1d前={a2_vals.get('macd_hist_1d', 'N/A'):.2f}, 2d前={a2_vals.get('macd_hist_2d', 'N/A'):.2f}")
+        lines.append(f"     A2(MACD弱化): MACD={_fmt(a2_vals.get('macd', 'N/A'), '.2f')}, "
+                    f"Hist={_fmt(a2_vals.get('macd_hist_current', 'N/A'), '.2f')}, "
+                    f"1d前={_fmt(a2_vals.get('macd_hist_1d', 'N/A'), '.2f')}, 2d前={_fmt(a2_vals.get('macd_hist_2d', 'N/A'), '.2f')}")
     if details_a.get("a3_divergence"):
         a3_vals = details_a.get("a3_values", {})
-        lines.append(f"     A3(ダイバージェンス): Close={a3_vals.get('close', 'N/A'):.2f}, "
-                    f"20d高値={a3_vals.get('high_20', 'N/A'):.2f}, "
-                    f"RSI={a3_vals.get('rsi_current', 'N/A'):.1f}, 20dRSI最大={a3_vals.get('rsi_max_20d', 'N/A'):.1f}")
+        lines.append(f"     A3(ダイバージェンス): Close={_fmt(a3_vals.get('close', 'N/A'), '.2f')}, "
+                    f"20d高値={_fmt(a3_vals.get('high_20', 'N/A'), '.2f')}, "
+                    f"RSI={_fmt(a3_vals.get('rsi_current', 'N/A'), '.1f')}, 20dRSI最大={_fmt(a3_vals.get('rsi_max_20d', 'N/A'), '.1f')}")
     if details_a.get("a4_overbought"):
         a4_vals = details_a.get("a4_values", {})
-        lines.append(f"     A4(買われすぎ): Close={a4_vals.get('close', 'N/A'):.2f}, "
-                    f"BB上限={a4_vals.get('bb_upper', 'N/A'):.2f}, "
-                    f"上髭比={a4_vals.get('upper_wick_ratio', 'N/A'):.2f}, 陰線={a4_vals.get('is_bearish', False)}")
+        lines.append(f"     A4(買われすぎ): Close={_fmt(a4_vals.get('close', 'N/A'), '.2f')}, "
+                    f"BB上限={_fmt(a4_vals.get('bb_upper', 'N/A'), '.2f')}, "
+                    f"上髭比={_fmt(a4_vals.get('upper_wick_ratio', 'N/A'), '.2f')}, 陰線={a4_vals.get('is_bearish', False)}")
 
     # Gate② 需給 (B)
     lines.append(f"  ✅ Gate② 需給 (B): {'✓' if signal.gate_top_b else '✗'}")
     details_b = signal.details.get("gate_top_b", {})
     if details_b.get("b1_volume_failure"):
         b1_vals = details_b.get("b1_values", {})
-        lines.append(f"     B1(出来高不全): Volume比={b1_vals.get('volume_ratio', 'N/A'):.2f}, "
-                    f"高値距離%={b1_vals.get('distance_from_high_20_pct', 'N/A'):.2f}")
+        lines.append(f"     B1(出来高不全): Volume比={_fmt(b1_vals.get('volume_ratio', 'N/A'), '.2f')}, "
+                    f"高値距離%={_fmt(b1_vals.get('distance_from_high_20_pct', 'N/A'), '.2f')}")
     if details_b.get("b2_upper_wick_dominance"):
         b2_vals = details_b.get("b2_values", {})
         wick_ratios = b2_vals.get('upper_wick_ratios', [])
@@ -257,9 +264,9 @@ def format_signal_for_notification(signal: Signal) -> str:
                     f"上髭比(3d)=[{wick_str}]")
     if details_b.get("b3_gap_up_failure"):
         b3_vals = details_b.get("b3_values", {})
-        lines.append(f"     B3(寄り天): Open={b3_vals.get('open', 'N/A'):.2f}, "
-                    f"Close={b3_vals.get('close', 'N/A'):.2f}, "
-                    f"前日高値={b3_vals.get('prev_high', 'N/A'):.2f}, Gap%={b3_vals.get('gap_pct', 'N/A'):.2f}")
+        lines.append(f"     B3(寄り天): Open={_fmt(b3_vals.get('open', 'N/A'), '.2f')}, "
+                    f"Close={_fmt(b3_vals.get('close', 'N/A'), '.2f')}, "
+                    f"前日高値={_fmt(b3_vals.get('prev_high', 'N/A'), '.2f')}, Gap%={_fmt(b3_vals.get('gap_pct', 'N/A'), '.2f')}")
 
     # Gate② マクロ (C)
     lines.append(f"  {'✅' if signal.gate_top_c else '  '} Gate② マクロ (C): {'✓ 強い天井示唆' if signal.gate_top_c else '✗'}")
@@ -277,19 +284,19 @@ def format_signal_for_notification(signal: Signal) -> str:
     if trigger_vals:
         prev_low_break = '✓' if trigger_details.get("prev_low_break") else '✗'
         ma5_break = '✓' if trigger_details.get("ma5_break") else '✗'
-        lines.append(f"     Close={trigger_vals.get('close', 'N/A'):.2f}, "
-                    f"前日安値={trigger_vals.get('prev_low', 'N/A'):.2f}({prev_low_break}), "
-                    f"MA5={trigger_vals.get('ma_5', 'N/A'):.2f}({ma5_break})")
+        lines.append(f"     Close={_fmt(trigger_vals.get('close', 'N/A'), '.2f')}, "
+                    f"前日安値={_fmt(trigger_vals.get('prev_low', 'N/A'), '.2f')}({prev_low_break}), "
+                    f"MA5={_fmt(trigger_vals.get('ma_5', 'N/A'), '.2f')}({ma5_break})")
 
     lines.append("")
 
     # テクニカル値サマリー
     tech_vals = signal.details.get("technical_values", {})
     lines.append("**テクニカル値サマリー:**")
-    lines.append(f"  終値={tech_vals.get('close', 'N/A'):.2f}, "
-                f"RSI={tech_vals.get('rsi', 'N/A'):.1f}, "
-                f"MACD={tech_vals.get('macd', 'N/A'):.2f}, "
-                f"VI={tech_vals.get('vi', 'N/A'):.2f}")
+    lines.append(f"  終値={_fmt(tech_vals.get('close', 'N/A'), '.2f')}, "
+                f"RSI={_fmt(tech_vals.get('rsi', 'N/A'), '.1f')}, "
+                f"MACD={_fmt(tech_vals.get('macd', 'N/A'), '.2f')}, "
+                f"VI={_fmt(tech_vals.get('vi', 'N/A'), '.2f')}")
     lines.append("")
 
     # シグナル強度
