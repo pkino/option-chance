@@ -1,4 +1,6 @@
 """ダッシュボード生成のテスト"""
+import json
+import re
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -8,7 +10,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scripts.build_dashboard import find_config_changes, render_html
+from scripts.build_dashboard import describe_verdict, find_config_changes, render_html
 from src.history.store import append_record, build_record
 
 from tests.test_history_store import make_signal
@@ -19,6 +21,18 @@ def config():
     config_path = Path(__file__).parent.parent / "config" / "config.yaml"
     with open(config_path, encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+def declared_charts(html: str):
+    """ページが JS に渡しているグラフ定義（CHARTS）を取り出す。"""
+    match = re.search(r"const CHARTS = (\[.*?\]);", html, re.S)
+    return json.loads(match.group(1)) if match else []
+
+
+def assert_every_declared_chart_is_rendered(html: str) -> None:
+    charts = declared_charts(html)
+    assert charts, "グラフが1つも宣言されていない"
+    assert html.count("Plotly.newPlot") == len(charts)
 
 
 def make_records(config, count: int, start: date = date(2026, 1, 1)):
@@ -37,19 +51,33 @@ class TestRenderHtml:
         assert "まだ判定履歴がありません" in html
 
     def test_single_record_renders_charts(self, config):
-        """履歴が 1 件でも 4 つのグラフを描画する（点が 1 つ並ぶだけ）。"""
-        html = render_html(make_records(config, 1), days=180)
-
-        assert html.count("Plotly.newPlot") == 4
+        """履歴が 1 件でもすべてのグラフを描画する（点が 1 つ並ぶだけ）。"""
+        assert_every_declared_chart_is_rendered(render_html(make_records(config, 1), days=180))
 
     def test_multiple_records_render_all_sections(self, config):
         html = render_html(make_records(config, 40), days=180)
 
         # グラフのタイトルは Plotly の JSON 内で \uXXXX にエスケープされるため、
-        # グラフは個数で、素の HTML で出す部分は文字列で確認する
-        assert html.count("Plotly.newPlot") == 4
+        # グラフは宣言との突き合わせで、素の HTML で出す部分は文字列で確認する
+        assert_every_declared_chart_is_rendered(html)
         assert "直近30日の判定と指標値" in html
-        assert "現在の判定条件ハッシュ" in html
+        assert "判定条件ハッシュ" in html
+        assert "最新判定日" in html
+
+    def test_hero_shows_latest_verdict_and_gate_chips(self, config):
+        html = render_html(make_records(config, 10), days=180)
+
+        assert "hero-status" in html
+        for gate in ("Gate①", "Gate②A", "Gate②B", "Gate②C", "Trigger③"):
+            assert gate in html
+
+    def test_range_filter_matches_declared_charts(self, config):
+        """期間ボタンは全グラフを同じ期間に揃えるので、宣言と描画が一致している必要がある。"""
+        html = render_html(make_records(config, 40), days=180)
+
+        assert 'class="range" data-days="30"' in html
+        for meta in declared_charts(html):
+            assert f'id="{meta["id"]}"' in html
 
     def test_days_option_limits_the_period(self, config):
         html = render_html(make_records(config, 60), days=10)
@@ -93,3 +121,34 @@ class TestCliOutput:
 
         assert out.exists()
         assert "判定条件ダッシュボード" in out.read_text(encoding="utf-8")
+
+
+class TestDescribeVerdict:
+    def test_entry_signal_is_critical(self, config):
+        record = make_records(config, 1)[0]
+        record["flags"].update(is_entry_signal=True, is_strong_signal=False)
+
+        label, status, _ = describe_verdict(record)
+
+        assert (label, status) == ("エントリー成立", "critical")
+
+    def test_probe_signal_is_warning(self, config):
+        record = make_records(config, 1)[0]
+        record["flags"].update(is_entry_signal=False, is_probe_signal=True)
+
+        assert describe_verdict(record)[1] == "warning"
+
+    def test_cooldown_takes_precedence(self, config):
+        """抑制中はエントリー成立より先に伝える必要がある。"""
+        record = make_records(config, 1)[0]
+        record["flags"].update(is_entry_signal=True, cooldown_suppressed=True)
+
+        assert describe_verdict(record)[0] == "クールダウン抑制"
+
+    def test_no_signal_is_muted(self, config):
+        record = make_records(config, 1)[0]
+        record["flags"].update(
+            is_entry_signal=False, is_probe_signal=False, is_supply_dominant_entry=False
+        )
+
+        assert describe_verdict(record)[:2] == ("待機中", "muted")

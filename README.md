@@ -163,11 +163,16 @@ python scripts/build_dashboard.py --history history/signals.jsonl --out docs/ind
 ```
 
 **表示内容:**
-1. **判定条件の成立状況** — Gate①/②A/②B/②C/Trigger③ と各サブ条件（A1〜A4, B1〜B3）の日次ヒートマップ
-2. **Gate① VI安定条件の推移** — VI / VI MA10 / STD10 / Slope10 と各閾値
-3. **Gate②A テクニカル指標の推移** — RSI（過熱ライン付き）、MACDヒストグラム
-4. **日経平均とシグナル** — 終値・MA5・BB上限と、エントリー/打診シグナルの発生日
-5. **直近30日の判定と指標値** — 生の数値テーブル
+1. **最新の判定サマリー** — 総合判定（待機中／打診／エントリー成立など）、Gate①〜Trigger③の成否チップ、VI・RSI・終値の現在値
+2. **判定条件の成立状況** — Gate①/②A/②B/②C/Trigger③ と各サブ条件（A1〜A4, B1〜B3）の日次ヒートマップ。
+   赤＝シグナル発火、青＝条件成立
+3. **Gate① VI水準 / VIの安定度** — VI・VI MA10、STD10・Slope10 と各閾値
+4. **RSI(14) / MACDヒストグラム** — Gate②Aの根拠
+5. **日経平均とシグナル** — 終値・MA5・BB上限と、エントリー/打診シグナルの発生日
+6. **直近30日の判定と指標値** — 生の数値テーブル（折りたたみ）
+
+画面右上の **30日 / 90日 / 全期間** ボタンで全グラフの表示期間をまとめて切り替えられます。
+配色はOSのダークモード設定に追従します。
 
 `config/config.yaml` の判定条件（`gate_vi` / `gate_top` / `trigger` / `risk_management` /
 `option_selection`）を変更すると各レコードの `config_hash` が変わり、
