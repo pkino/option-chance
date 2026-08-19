@@ -103,7 +103,16 @@ TABLE_METRICS = [
 ]
 
 PLOT_CONFIG = {"displayModeBar": False, "responsive": True}
-FONT_STACK = 'system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif'
+# 日本語フェイスを先頭に明示する。system-ui を先頭に置くと、日本語フォントを
+# 持たない環境（Linux サーバや一部の Windows）で中国語フォントに落ち、
+# 「骨」「直」などの字形が中国語になってしまう。
+FONT_STACK = (
+    '"Noto Sans JP", "Hiragino Kaku Gothic ProN", "Hiragino Sans", '
+    '"Yu Gothic", "Meiryo", sans-serif'
+)
+GOOGLE_FONTS_URL = (
+    "https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap"
+)
 
 
 def _base_layout(height: int, **overrides) -> Dict[str, Any]:
@@ -633,6 +642,9 @@ def render_html(records: List[Dict[str, Any]], days: int) -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>option-chance 判定条件ダッシュボード</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="{GOOGLE_FONTS_URL}">
 <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
 <style>
 {_stylesheet()}
@@ -741,7 +753,7 @@ def _stylesheet() -> str:
   .hero-date {{ color: var(--muted); font-size: .78rem; letter-spacing: .04em; }}
   .hero-status {{
     display: flex; align-items: center; gap: 10px;
-    font-size: 1.55rem; font-weight: 650; margin: 2px 0 4px; line-height: 1.25;
+    font-size: 1.55rem; font-weight: 700; margin: 2px 0 4px; line-height: 1.25;
   }}
   .hero-status .dot {{ width: 11px; height: 11px; border-radius: 50%; flex: none; }}
   .status-critical {{ color: var(--critical); }}
@@ -768,7 +780,7 @@ def _stylesheet() -> str:
   .tiles {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }}
   .tiles > .tile {{ display: flex; flex-direction: column; justify-content: center; }}
   .tile-label {{ color: var(--muted); font-size: .75rem; }}
-  .tile-value {{ font-size: 1.7rem; font-weight: 620; line-height: 1.25; margin: 2px 0; }}
+  .tile-value {{ font-size: 1.7rem; font-weight: 600; line-height: 1.25; margin: 2px 0; }}
   .tile-note {{ color: var(--ink-2); font-size: .72rem; }}
 
   /* ---- グラフカード ---- */
@@ -779,7 +791,7 @@ def _stylesheet() -> str:
   }}
   .card-wide {{ grid-column: 1 / -1; }}
   .card-head {{ display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }}
-  .card h2 {{ font-size: .92rem; margin: 0; font-weight: 620; }}
+  .card h2 {{ font-size: .92rem; margin: 0; font-weight: 600; }}
   .hint {{ color: var(--muted); font-size: .74rem; }}
 
   /* ---- テーブル ---- */
@@ -820,7 +832,7 @@ def _stylesheet() -> str:
     background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
     padding: 56px 24px; text-align: center; color: var(--ink-2);
   }}
-  .empty-title {{ font-size: 1.05rem; font-weight: 620; color: var(--ink); margin: 0 0 6px; }}
+  .empty-title {{ font-size: 1.05rem; font-weight: 600; color: var(--ink); margin: 0 0 6px; }}
 
   @media (max-width: 1000px) {{
     .hero {{ grid-template-columns: 1fr; }}
@@ -924,6 +936,17 @@ document.querySelectorAll('.range').forEach((btn) => {
 if (CHARTS.length) {
   applyTheme();
   q.addEventListener('change', applyTheme);
+
+  // Webフォントは非同期に届く。届く前に描かれたSVGテキストは字幅が
+  // フォールバック基準のままなので、読み込み完了後に測り直させる。
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => {
+      CHARTS.forEach(({ id }) => {
+        const el = document.getElementById(id);
+        if (el) Plotly.Plots.resize(el);
+      });
+    });
+  }
 }
 """
 

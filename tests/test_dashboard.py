@@ -10,7 +10,12 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scripts.build_dashboard import describe_verdict, find_config_changes, render_html
+from scripts.build_dashboard import (
+    FONT_STACK,
+    describe_verdict,
+    find_config_changes,
+    render_html,
+)
 from src.history.store import append_record, build_record
 
 from tests.test_history_store import make_signal
@@ -152,3 +157,23 @@ class TestDescribeVerdict:
         )
 
         assert describe_verdict(record)[:2] == ("待機中", "muted")
+
+
+class TestTypography:
+    """日本語フォントの指定が崩れると字形が中国語になるので、明示的に守る。"""
+
+    def test_font_stack_leads_with_a_japanese_face(self):
+        assert FONT_STACK.startswith('"Noto Sans JP"')
+
+    def test_font_stack_has_no_generic_system_ui(self):
+        # system-ui を含めると、日本語フォントを持たない環境で中国語フォントに落ちる
+        assert "system-ui" not in FONT_STACK
+
+    def test_page_loads_the_webfont(self, config):
+        html = render_html(make_records(config, 5), days=180)
+
+        assert "fonts.googleapis.com/css2?family=Noto+Sans+JP" in html
+        assert 'rel="preconnect" href="https://fonts.gstatic.com"' in html
+
+    def test_empty_page_also_loads_the_webfont(self):
+        assert "fonts.googleapis.com" in render_html([], days=180)
