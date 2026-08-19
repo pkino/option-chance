@@ -1,10 +1,71 @@
 """エントリーシグナル判定（Gate統合）"""
 from typing import List, Dict, Any, Optional
 from datetime import date
+import numpy as np
 import pandas as pd
 
 from ..models.option import Signal, MarketData
 from ..indicators.technical import TechnicalIndicators, SignalDetector
+
+
+# technical_values に常時格納する指標列。
+# 各 detect_* は条件不成立時に空の詳細を返すため、判定の成否に関わらず
+# ここで指標値を揃えておかないと時系列（履歴・ダッシュボード）が歯抜けになる。
+_TECHNICAL_VALUE_COLUMNS = [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "rsi",
+    "macd",
+    "macd_signal",
+    "macd_hist",
+    "bb_upper",
+    "bb_middle",
+    "ma_5",
+    "ma_20",
+    "ma_25",
+    "vi",
+    "vi_ma_10",
+    "vi_std_10",
+    "vi_slope_10",
+    "volume_ratio",
+    "upper_wick_ratio",
+    "lower_wick_ratio",
+    "body_ratio",
+    "distance_from_high_20_pct",
+    "high_20",
+    "close_max_20",
+    "is_bearish",
+]
+
+
+def _to_plain(val: Any) -> Any:
+    """numpy/pandas のスカラーを素の Python 型に、NaN/NaT を None に正規化する。"""
+    if val is None:
+        return None
+    if isinstance(val, (bool, np.bool_)):
+        return bool(val)
+    if pd.isna(val):
+        return None
+    if isinstance(val, (int, float, np.integer, np.floating)):
+        return float(val)
+    return val
+
+
+def _collect_technical_values(df: pd.DataFrame, idx: int) -> Dict[str, Any]:
+    """判定の成否に関わらず、その日の指標値を一式そろえて返す。"""
+    row = df.iloc[idx]
+
+    values: Dict[str, Any] = {}
+    for col in _TECHNICAL_VALUE_COLUMNS:
+        values[col] = _to_plain(row.get(col))
+
+    # 前日安値（Trigger③ の判定根拠。不成立日でも推移を追えるようにする）
+    values["prev_low"] = _to_plain(df.iloc[idx - 1]["low"]) if idx > 0 else None
+
+    return values
 
 
 class GateChecker:
@@ -112,15 +173,7 @@ class GateChecker:
             "gate_top_b": {"satisfied": gate_top_b, **details_b},
             "gate_top_c": {"satisfied": gate_top_c, **details_c},
             "trigger": {"satisfied": trigger, **details_trigger},
-            "technical_values": {
-                "close": row["close"],
-                "rsi": row.get("rsi"),
-                "macd": row.get("macd"),
-                "macd_hist": row.get("macd_hist"),
-                "bb_upper": row.get("bb_upper"),
-                "vi": row.get("vi"),
-                "volume_ratio": row.get("volume_ratio"),
-            },
+            "technical_values": _collect_technical_values(df, idx),
         }
 
         signal = Signal(
@@ -194,7 +247,9 @@ class GateChecker:
 
 
 def _fmt(val, spec: str) -> str:
-    """数値なら format(val, spec)、それ以外は str(val) を返す。"""
+    """数値なら format(val, spec)、欠損は N/A、それ以外は str(val) を返す。"""
+    if val is None:
+        return "N/A"
     if isinstance(val, (int, float)):
         return format(val, spec)
     return str(val)
