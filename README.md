@@ -29,6 +29,11 @@
   - 毎日自動でチェック実行
   - 手動実行も可能
 
+- ✅ **判定履歴とダッシュボード** ⭐ NEW
+  - 毎日の判定結果と根拠指標を `history/signals.jsonl` に蓄積
+  - Gate/Trigger の成立状況・VI・RSI等の推移をHTMLダッシュボードで可視化
+  - 判定条件（閾値）を変更した日もグラフ上で識別可能
+
 - ✅ **バックテストエンジン**
   - 過去データでの戦略検証
   - 勝率・期待値・Profit Factor等の統計計算
@@ -51,12 +56,19 @@ option-chance/
 │   │   └── engine.py      # バックテストエンジン
 │   ├── notifiers/         # 通知
 │   │   └── slack.py       # Slack通知
-│   └── models/            # データモデル
-│       └── option.py      # OptionData, MarketData, Signal, Trade
+│   ├── models/            # データモデル
+│   │   └── option.py      # OptionData, MarketData, Signal, Trade
+│   └── history/           # 判定履歴の読み書き
+│       └── store.py       # JSONL 追記・config_hash 算出
 ├── scripts/
 │   ├── daily_check.py     # 日次エントリーチェック（メイン）
+│   ├── build_dashboard.py # 判定履歴 → HTMLダッシュボード生成
 │   ├── test_*.py          # テストスクリプト
 │   └── run_backtest.py    # バックテスト実行（TODO）
+├── history/
+│   └── signals.jsonl      # 日次判定履歴（1判定日=1行、バッチが追記）
+├── docs/
+│   └── index.html         # 判定条件ダッシュボード（GitHub Pages公開用）
 ├── config/
 │   └── config.yaml        # 設定ファイル
 ├── .github/workflows/
@@ -133,6 +145,37 @@ python scripts/daily_check.py --lookback-days 90 --send-no-signal
 **オプション:**
 - `--lookback-days N`: 過去N日分のデータを取得（デフォルト: 60）
 - `--send-no-signal`: シグナルがない場合もSlackに通知
+- `--history PATH`: 判定履歴の出力先（デフォルト: `history/signals.jsonl`）
+
+実行するたびに、判定結果と根拠指標が `history/signals.jsonl` に1行追記されます。
+同じ日に複数回実行した場合は、その日の行が上書きされます（重複しません）。
+
+### 判定条件ダッシュボード
+
+蓄積した履歴から、判定条件の時系列変化を1枚のHTMLにまとめます。
+
+```bash
+# history/signals.jsonl → docs/index.html
+python scripts/build_dashboard.py
+
+# 期間や入出力を指定
+python scripts/build_dashboard.py --history history/signals.jsonl --out docs/index.html --days 90
+```
+
+**表示内容:**
+1. **判定条件の成立状況** — Gate①/②A/②B/②C/Trigger③ と各サブ条件（A1〜A4, B1〜B3）の日次ヒートマップ
+2. **Gate① VI安定条件の推移** — VI / VI MA10 / STD10 / Slope10 と各閾値
+3. **Gate②A テクニカル指標の推移** — RSI（過熱ライン付き）、MACDヒストグラム
+4. **日経平均とシグナル** — 終値・MA5・BB上限と、エントリー/打診シグナルの発生日
+5. **直近30日の判定と指標値** — 生の数値テーブル
+
+`config/config.yaml` の判定条件（`gate_vi` / `gate_top` / `trigger` / `risk_management` /
+`option_selection`）を変更すると各レコードの `config_hash` が変わり、
+ダッシュボード上に「条件変更」の縦線が引かれます。
+**「閾値を緩めた前後で検知がどう変わったか」がグラフ上で直接比較できます。**
+
+> 履歴は導入時点から蓄積されます（過去へのさかのぼり生成は行いません）。
+> そのため導入直後はデータ点が少なく、推移として読めるようになるまで数週間かかります。
 
 ### テスト実行
 
@@ -145,6 +188,9 @@ python scripts/test_market_data.py
 
 # JPXデータ取得のテスト（GHA環境推奨）
 python scripts/test_jpx.py
+
+# ユニットテスト（判定履歴・ダッシュボード）
+pytest tests/ -v
 ```
 
 ### バックテスト（TODO）
@@ -171,6 +217,22 @@ GitHub Actionsが毎日 **日本時間 18:00 (UTC 9:00)** に自動実行され�
 GitHubリポジトリの Settings > Secrets and variables > Actions で以下を設定：
 
 - `SLACK_WEBHOOK_URL` (必須)
+
+### ダッシュボードの公開（GitHub Pages）
+
+毎日バッチは判定後に `history/signals.jsonl` と `docs/index.html` を更新し、
+リポジトリに自動コミットします（`permissions: contents: write` が必要）。
+
+これをWebで見るには、**リポジトリ側で1回だけ**以下を設定してください：
+
+1. リポジトリの Settings > Pages を開く
+2. Source を「Deploy from a branch」にする
+3. Branch を `main` / `/docs` に設定して Save
+
+設定後、`https://<ユーザー名>.github.io/option-chance/` でダッシュボードが閲覧できます。
+
+公開したくない場合はPagesを有効化しなくても構いません。
+その場合は `docs/index.html` をローカルにpullしてブラウザで開けば同じ内容が見られます。
 
 ## 戦略の詳細
 
@@ -277,6 +339,7 @@ GitHubリポジトリの Settings > Secrets and variables > Actions で以下を
 - [ ] トレーリング利確の実装
 - [ ] バックテスト実行スクリプト
 - [ ] Web UI（Streamlit）
+- [ ] 判定履歴の過去分バックフィル（現状は導入時点からの蓄積のみ）
 - [ ] IV×Γ×Δシミュレーション
 - [ ] 5日以内に動く確率の定量化
 

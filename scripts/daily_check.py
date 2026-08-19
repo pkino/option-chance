@@ -15,16 +15,24 @@ from src.data_sources.jpx import JPXDataFetcher
 from src.data_sources.market_data import MarketDataFetcher
 from src.signals.gate import GateChecker, format_signal_for_notification
 from src.notifiers.slack import SlackNotifier
+from src.history.store import DEFAULT_HISTORY_PATH, append_record, build_record
 
 
 class DailyEntryChecker:
     """日次エントリーチェッカー"""
 
-    def __init__(self, config_path: str = "config/config.yaml"):
+    def __init__(
+        self,
+        config_path: str = "config/config.yaml",
+        history_path: Optional[str] = None,
+    ):
         """
         Args:
             config_path: 設定ファイルのパス
+            history_path: 判定履歴（JSONL）の出力先。Noneなら既定パス
         """
+        self.history_path = Path(history_path) if history_path else DEFAULT_HISTORY_PATH
+
         # 設定を読み込み
         config_file = project_root / config_path
         with open(config_file) as f:
@@ -91,6 +99,9 @@ class DailyEntryChecker:
                     self.slack_notifier.send_no_signal(str(date.today()))
                 return False
 
+            # 判定結果を履歴に記録（エントリー成立の有無に関わらず全経路で残す）
+            self._record_history(latest_signal)
+
             # 3. エントリーシグナルをチェック
             print("\n[3/4] エントリーシグナルチェック中...")
             if latest_signal.is_entry_signal:
@@ -114,6 +125,12 @@ class DailyEntryChecker:
                 print(f"    - Gate② (A): {latest_signal.gate_top_a}")
                 print(f"    - Gate② (B): {latest_signal.gate_top_b}")
                 print(f"    - Trigger③: {latest_signal.trigger}")
+                print(f"    - 打診シグナル: {latest_signal.is_probe_signal}")
+                print(f"    - 需給主導シグナル: {latest_signal.is_supply_dominant_entry}")
+                print(
+                    f"    - クールダウン抑制: "
+                    f"{latest_signal.details.get('cooldown_suppressed', False)}"
+                )
                 print("\n  詳細:")
                 print(format_signal_for_notification(latest_signal))
 
@@ -133,6 +150,18 @@ class DailyEntryChecker:
                 self.slack_notifier.send_error(str(e))
 
             return False
+
+    def _record_history(self, signal) -> None:
+        """判定結果を履歴JSONLに追記する。
+
+        履歴の書き込み失敗でシグナル通知そのものを止めないよう、例外は警告に留める。
+        """
+        try:
+            record = build_record(signal, self.config)
+            records = append_record(record, self.history_path)
+            print(f"  📝 判定履歴を記録: {self.history_path} ({len(records)} 件)")
+        except Exception as e:
+            print(f"  ⚠️ 判定履歴の記録に失敗: {e}")
 
     def _fetch_market_data(self, lookback_days: int) -> List[MarketData]:
         """市場データを取得"""
@@ -240,11 +269,17 @@ def main():
     parser.add_argument(
         "--config", type=str, default="config/config.yaml", help="設定ファイルのパス"
     )
+    parser.add_argument(
+        "--history",
+        type=str,
+        default=None,
+        help=f"判定履歴（JSONL）の出力先（デフォルト: {DEFAULT_HISTORY_PATH}）",
+    )
 
     args = parser.parse_args()
 
     # チェッカーを初期化
-    checker = DailyEntryChecker(config_path=args.config)
+    checker = DailyEntryChecker(config_path=args.config, history_path=args.history)
 
     # 実行
     try:

@@ -19,7 +19,7 @@ on:
         default: false
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   check-entry-signal:
@@ -52,6 +52,35 @@ jobs:
           else
             python scripts/daily_check.py --lookback-days $LOOKBACK_DAYS
           fi
+
+      - name: Build dashboard
+        run: python scripts/build_dashboard.py
+
+      - name: Commit history and dashboard
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add history docs
+
+          # 未追跡ファイルも拾うため、add 後のインデックスで差分を判定する
+          if git diff --cached --quiet; then
+            echo "判定履歴・ダッシュボードに差分なし。コミットをスキップします。"
+            exit 0
+          fi
+
+          git commit -m "chore: 判定履歴とダッシュボードを更新 ($(date -u +%Y-%m-%d))"
+
+          # 他のコミットと競合しうるのでリベースしてから push（失敗時は指数バックオフ）
+          for delay in 2 4 8 16 0; do
+            git pull --rebase origin "${GITHUB_REF_NAME}" && \
+              git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            if [ "$delay" = "0" ]; then
+              echo "::error::履歴のプッシュに失敗しました"
+              exit 1
+            fi
+            echo "プッシュに失敗しました。${delay}秒後にリトライします..."
+            sleep "$delay"
+          done
 
       - name: Upload logs (on failure)
         if: failure()
