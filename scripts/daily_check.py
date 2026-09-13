@@ -17,6 +17,9 @@ from src.signals.gate import GateChecker, format_signal_for_notification
 from src.notifiers.slack import SlackNotifier
 from src.history.store import DEFAULT_HISTORY_PATH, append_record, build_record
 
+# 取得期間。Gate① hybrid の「VIの1年順位」に252営業日分のVIが要るため、暦日で1年強を取る
+DEFAULT_LOOKBACK_DAYS = 420
+
 
 class DailyEntryChecker:
     """日次エントリーチェッカー"""
@@ -58,7 +61,7 @@ class DailyEntryChecker:
             except Exception as e:
                 print(f"⚠️ Slack通知の初期化に失敗: {e}")
 
-    def run(self, lookback_days: int = 60, send_no_signal: bool = False) -> bool:
+    def run(self, lookback_days: int = DEFAULT_LOOKBACK_DAYS, send_no_signal: bool = False) -> bool:
         """
         日次チェックを実行
 
@@ -93,6 +96,7 @@ class DailyEntryChecker:
             if signals:
                 latest_signal = signals[-1]
                 print(f"  最新シグナル日付: {latest_signal.date}")
+                self._warn_if_percentile_unavailable(latest_signal)
             else:
                 print("  シグナルなし")
                 if self.slack_notifier and send_no_signal:
@@ -162,6 +166,22 @@ class DailyEntryChecker:
             print(f"  📝 判定履歴を記録: {self.history_path} ({len(records)} 件)")
         except Exception as e:
             print(f"  ⚠️ 判定履歴の記録に失敗: {e}")
+
+    def _warn_if_percentile_unavailable(self, signal) -> None:
+        """hybrid判定なのにVIの1年順位が出ていない場合に警告する。
+
+        取得期間が短いと順位が算出できず、Gate①が絶対水準だけの判定に退化する。
+        黙って厳しくなると気付けないので、ここで明示する。
+        """
+        gate_vi = signal.details.get("gate_vi", {})
+        if gate_vi.get("mode") != "hybrid" or gate_vi.get("vi_pct_1y") is not None:
+            return
+        window = self.config.get("gate_vi", {}).get("vi_percentile_window", 252)
+        print(
+            "  ⚠️ VIの1年順位を算出できませんでした（履歴不足）。"
+            f"Gate①は絶対水準のみで判定されます。--lookback-days を {window} 営業日"
+            "以上が入る値に増やしてください。"
+        )
 
     def _fetch_market_data(self, lookback_days: int) -> List[MarketData]:
         """市場データを取得"""
@@ -258,8 +278,8 @@ def main():
     parser.add_argument(
         "--lookback-days",
         type=int,
-        default=60,
-        help="過去何日分のデータを取得するか（デフォルト: 60）",
+        default=DEFAULT_LOOKBACK_DAYS,
+        help=f"過去何日分のデータを取得するか（デフォルト: {DEFAULT_LOOKBACK_DAYS}）",
     )
     parser.add_argument(
         "--send-no-signal",

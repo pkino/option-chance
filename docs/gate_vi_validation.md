@@ -3,7 +3,11 @@
 作成日: 2026-09-11
 対象: `config/config.yaml` の `gate_vi` セクション
 
+**本レポートの検証対象は下記の旧条件。検証結果を受けて、
+5.3 の案A（hybrid）を実装済み。**
+
 ```yaml
+# 検証対象（旧条件）
 gate_vi:
   vi_threshold: 20          # VI <= 20
   vi_10d_avg_threshold: 20  # VI 10日平均 <= 20
@@ -365,23 +369,52 @@ gate_vi:
 より保守的にしたい場合は `vi_percentile_threshold: 30` / `vi_10d_cv_threshold: 0.08`
 とすると年間3〜5回程度に絞れる（本検証の V6 相当。delta モードで PF 最良）。
 
-### 5.3 実装時の影響範囲
+### 5.3 実装内容（案A = V8 を採用、実装済み）
+
+本レポートの提案のうち **案A（V8相当 / hybrid）** を実装した。
 
 | ファイル | 変更内容 |
 |---|---|
-| `config/config.yaml` | `gate_vi` セクションの書き換え |
-| `src/indicators/technical.py` | `_add_vi_indicators` に `vi_cv_10` / `vi_pct_1y` を追加、`detect_gate_vi` を mode 対応に |
-| `src/signals/gate.py` | `_TECHNICAL_VALUE_COLUMNS` に新指標を追加、通知フォーマットに相対水準を表示 |
-| `scripts/build_dashboard.py` | `TABLE_METRICS` とグラフに `vi_cv_10` / `vi_pct_1y` を追加 |
-| `tests/` | `detect_gate_vi` の mode 別ユニットテストを追加 |
+| `config/config.yaml` | `gate_vi` を hybrid 化。`mode` / `vi_percentile_window` / `vi_percentile_threshold` / `vi_10d_cv_threshold` を追加し、`vi_threshold` を 20→25、`vi_10d_slope_threshold` を 0.1→0.15 に |
+| `src/indicators/technical.py` | `_add_vi_indicators` に `vi_cv_10`（SD10/MA10）と `vi_pct_1y`（1年パーセンタイル順位）を追加。`detect_gate_vi` を mode 対応に |
+| `src/signals/gate.py` | `_TECHNICAL_VALUE_COLUMNS` に新指標を追加、通知に1年順位とCVを表示 |
+| `scripts/daily_check.py` | 取得期間の既定を 60日 → 420日（1年順位の算出に252営業日必要）。順位が出ない場合に警告 |
+| `.github/workflows/daily-check.yml` | `lookback_days` の既定を 60 → 420 |
+| `scripts/build_dashboard.py` | 表と安定度グラフを「相対水準・CV・傾き」に。旧記録は STD10/MA10 から CV を復元 |
+| `scripts/bottleneck_analysis.py` | Gate①のシナリオを hybrid のツマミ（順位・CV）に差し替え |
+| `tests/test_gate_vi.py` | mode 別の判定、フォールバック、指標計算のユニットテスト（新規） |
 
-注意点:
+判定ロジック（hybrid）:
 
-- `vi_pct_1y` の算出には **252営業日分のVI履歴**が必要。
-  `MarketDataFetcher` の取得期間が足りているかの確認が必要
-  （不足時は絶対条件のみで判定するフォールバックを入れる）。
+```
+(VI <= 25 かつ MA10 <= 25)  OR  (1年パーセンタイル順位 <= 40%)
+  かつ CV10 = SD10/MA10 <= 0.10
+  かつ Slope10 <= 0.15
+```
+
+実装上の決定事項:
+
+- **履歴不足時のフォールバック**: `vi_pct_1y` は参照期間の半分（252営業日なら126営業日）
+  に満たない期間は算出せず、その間は絶対水準のみで判定する。
+  黙って厳しくならないよう、日次実行時に警告を出す。
+- **絶対SD (`vi_10d_std_threshold`) は hybrid では使わない**が、
+  `mode: absolute` への切り戻し用に config へ残している。
 - `config_hash` が変わるため、ダッシュボード上で閾値変更日として識別される（既存の仕組み）。
-- 既存の `history/signals.jsonl` には新指標が無いため、グラフは変更日以降のみ描画される。
+- 既存の `history/signals.jsonl` には `vi_pct_1y` が無いため、
+  相対水準のグラフは変更日以降のみ描画される（CV は旧記録からも復元して描画する）。
+
+合成データ（VI平均19.5の5年）での確認:
+
+| | Gate①通過率 | 年間エントリー |
+|---|---|---|
+| 旧 absolute (VI<=20/SD<=1.5) | 38.4% | 5.19 |
+| 新 hybrid (案A) | 77.2% | 7.79 |
+
+低VIレジームでは絶対水準側のORがほぼ常に成立するため、Gate①は緩いフィルタになる。
+これは設計どおりで、**Gate①は「高IVを掴まない」ためのキルスイッチであり、
+選別の主役は Gate②/Trigger③** という役割分担を明示したもの。
+逆に高VIレジーム（年平均VI>24、現在の相場）では相対水準側が効き、
+旧条件が年間発火ゼロだった局面でも発火するようになる。
 
 ### 5.4 検証の再実行方法
 

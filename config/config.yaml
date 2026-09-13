@@ -22,11 +22,30 @@ option_selection:
   target_delta: -0.30  # 最も近いデルタを選択
 
 # Gate① VI安定条件
+# mode: hybrid  = (絶対水準 OR 相対水準) かつ 変動係数CV かつ 傾き
+#       absolute = 旧方式。絶対水準・絶対SD・傾きの4条件すべて（切り戻し用に残す）
+# 絶対水準20は高VIレジーム（年平均VI>24）では年間発火ゼロになりやすく、
+# VIの水準そのものはその後の急落を予測しない。詳細は docs/gate_vi_validation.md
 gate_vi:
-  vi_threshold: 20
-  vi_10d_avg_threshold: 20
+  mode: hybrid
+
+  # 水準条件。hybrid では相対水準との OR なので、高VIレジームでの保険として機能する
+  vi_threshold: 25
+  vi_10d_avg_threshold: 25
+
+  # 相対水準: 直近 vi_percentile_window 営業日におけるVIのパーセンタイル順位(%)
+  # 履歴が window の半分に満たない期間は順位を算出せず、絶対水準のみで判定する
+  vi_percentile_window: 252
+  vi_percentile_threshold: 40
+
+  # 安定度: 変動係数 CV = STD10 / MA10。絶対SDと違いVI水準に依存しない
+  vi_10d_cv_threshold: 0.10
+
+  # 傾き（ポイント/日）
+  vi_10d_slope_threshold: 0.15  # 微上昇局面も許容（横ばい~緩やかな上昇を除外しない）
+
+  # absolute モード専用（hybrid では未使用）
   vi_10d_std_threshold: 1.5
-  vi_10d_slope_threshold: 0.1  # 0→0.1: 微上昇局面も許容（横ばい~緩やかな上昇を除外しない）
 
 # Gate② 天井示唆条件
 gate_top:

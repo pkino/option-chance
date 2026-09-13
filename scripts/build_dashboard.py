@@ -96,7 +96,8 @@ TABLE_METRICS = [
     ("macd_hist", "MACDヒスト", ".1f"),
     ("vi", "VI", ".2f"),
     ("vi_ma_10", "VI MA10", ".2f"),
-    ("vi_std_10", "VI STD10", ".2f"),
+    ("vi_pct_1y", "VI 1年順位%", ".0f"),
+    ("vi_cv_10", "VI CV10", ".3f"),
     ("vi_slope_10", "VI Slope10", ".3f"),
     ("volume_ratio", "出来高比", ".2f"),
     ("upper_wick_ratio", "上ヒゲ比", ".2f"),
@@ -186,6 +187,29 @@ def _metric(record: Dict[str, Any], key: str) -> Optional[float]:
 
 def _series(records: List[Dict[str, Any]], key: str) -> List[Optional[float]]:
     return [_metric(r, key) for r in records]
+
+
+def _vi_cv_series(records: List[Dict[str, Any]]) -> List[Optional[float]]:
+    """VI CV10。記録前の古い判定には無い項目なので STD10/MA10 から復元する。"""
+    values = []
+    for record in records:
+        cv = _metric(record, "vi_cv_10")
+        if cv is None:
+            std = _metric(record, "vi_std_10")
+            ma = _metric(record, "vi_ma_10")
+            cv = std / ma if std is not None and ma else None
+        values.append(cv)
+    return values
+
+
+def _threshold_text(records: List[Dict[str, Any]], *path: str) -> Optional[str]:
+    """閾値スナップショットから文字列設定（mode など）を取り出す。"""
+    node: Any = records[-1].get("thresholds", {}) if records else {}
+    for key in path:
+        if not isinstance(node, dict) or key not in node:
+            return None
+        node = node[key]
+    return node if isinstance(node, str) else None
 
 
 def _threshold_value(records: List[Dict[str, Any]], *path: str) -> Optional[float]:
@@ -314,31 +338,46 @@ def build_vi_level_chart(records: List[Dict[str, Any]]) -> go.Figure:
 
 
 def build_vi_stability_chart(records: List[Dict[str, Any]]) -> go.Figure:
-    """VI のばらつきと傾き。単位が違うので軸を分ける（二重軸にはしない）。"""
+    """VI の相対水準・ばらつき・傾き。単位が違うので軸を分ける（二重軸にはしない）。
+
+    hybrid モードでは「1年順位」と「CV10」が判定に使われる。absolute モードでは
+    順位は判定に使われないが、水準がどのあたりかを読むための参考として残す。
+    """
     dates = [r["date"] for r in records]
     light = THEME["light"]
+    hybrid = _threshold_text(records, "gate_vi", "mode") == "hybrid"
+
+    spread_key, spread_name, spread_threshold = (
+        ("vi_cv_10", "VI CV10", "vi_10d_cv_threshold")
+        if hybrid
+        else ("vi_std_10", "VI STD10", "vi_10d_std_threshold")
+    )
 
     fig = make_subplots(
-        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.14,
-        subplot_titles=("ばらつき VI STD10", "傾き VI Slope10"),
+        rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.10,
+        subplot_titles=(
+            "相対水準 VI 1年順位%",
+            f"ばらつき {spread_name}",
+            "傾き VI Slope10",
+        ),
     )
-    fig.add_trace(
-        go.Scatter(x=dates, y=_series(records, "vi_std_10"), name="VI STD10",
-                   line=dict(color=light["series_1"], width=2)),
-        row=1, col=1,
-    )
-    fig.add_trace(
-        go.Scatter(x=dates, y=_series(records, "vi_slope_10"), name="VI Slope10",
-                   line=dict(color=light["series_1"], width=2)),
-        row=2, col=1,
-    )
-
-    for row, keys in ((1, ("vi_10d_std_threshold",)), (2, ("vi_10d_slope_threshold",))):
-        value = _threshold_value(records, "gate_vi", *keys)
+    series = [
+        ("vi_pct_1y", "VI 1年順位%", "vi_percentile_threshold" if hybrid else None),
+        (spread_key, spread_name, spread_threshold),
+        ("vi_slope_10", "VI Slope10", "vi_10d_slope_threshold"),
+    ]
+    for row, (key, name, threshold_key) in enumerate(series, start=1):
+        values = _vi_cv_series(records) if key == "vi_cv_10" else _series(records, key)
+        fig.add_trace(
+            go.Scatter(x=dates, y=values, name=name,
+                       line=dict(color=light["series_1"], width=2)),
+            row=row, col=1,
+        )
+        value = _threshold_value(records, "gate_vi", threshold_key) if threshold_key else None
         if value is not None:
             _threshold(fig, value, f"閾値 {value}", row=row, col=1)
 
-    fig.update_layout(**_base_layout(240, showlegend=False))
+    fig.update_layout(**_base_layout(340, showlegend=False))
     fig.update_annotations(font=dict(size=11, color=light["ink_secondary"]))
     return _finalize_time_axis(_style_axes(fig), dates)
 
@@ -476,7 +515,12 @@ def build_hero(records: List[Dict[str, Any]]) -> str:
 
     vi = _metric(latest, "vi")
     vi_threshold = _threshold_value(records, "gate_vi", "vi_threshold")
-    if vi is not None and vi_threshold is not None:
+    vi_pct = _metric(latest, "vi_pct_1y")
+    pct_threshold = _threshold_value(records, "gate_vi", "vi_percentile_threshold")
+    # hybrid では絶対水準は OR の片側でしかないので、判定の主役である相対水準を優先して示す
+    if _threshold_text(records, "gate_vi", "mode") == "hybrid" and vi_pct is not None and pct_threshold is not None:
+        vi_note = f"1年順位 {vi_pct:.0f}%（閾値 {pct_threshold:.0f}%）"
+    elif vi is not None and vi_threshold is not None:
         vi_note = f"閾値 {vi_threshold} を{'下回る' if vi <= vi_threshold else '上回る'}"
     else:
         vi_note = "閾値との比較不可"
@@ -580,7 +624,7 @@ def render_html(records: List[Dict[str, Any]], days: int) -> str:
             (build_vi_level_chart(records), "chart-vi", False,
              "Gate① VI水準", "VIと10日移動平均", False),
             (build_vi_stability_chart(records), "chart-vi-stability", False,
-             "Gate① VIの安定度", "ばらつきと傾き", False),
+             "Gate① VIの安定度", "相対水準・ばらつき・傾き", False),
             (build_rsi_chart(records), "chart-rsi", False,
              "RSI(14)", "A1 RSI反転の根拠", False),
             (build_macd_chart(records), "chart-macd", False,

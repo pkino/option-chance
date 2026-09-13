@@ -5,17 +5,23 @@ import numpy as np
 
 from ..models.option import MarketData
 
+# VIパーセンタイル順位の既定の参照期間（営業日）。config の gate_vi.vi_percentile_window で上書きされる
+DEFAULT_VI_PERCENTILE_WINDOW = 252
+
 
 class TechnicalIndicators:
     """テクニカル指標計算クラス"""
 
     @staticmethod
-    def calculate_all(market_data: List[MarketData]) -> pd.DataFrame:
+    def calculate_all(
+        market_data: List[MarketData], vi_percentile_window: int = DEFAULT_VI_PERCENTILE_WINDOW
+    ) -> pd.DataFrame:
         """
         全てのテクニカル指標を計算
 
         Args:
             market_data: MarketDataのリスト
+            vi_percentile_window: VIパーセンタイル順位の参照期間（営業日）
 
         Returns:
             指標を含むDataFrame
@@ -31,7 +37,7 @@ class TechnicalIndicators:
         df = TechnicalIndicators._add_moving_averages(df, periods=[5, 20, 25])
         df = TechnicalIndicators._add_volume_indicators(df)
         df = TechnicalIndicators._add_price_patterns(df)
-        df = TechnicalIndicators._add_vi_indicators(df)
+        df = TechnicalIndicators._add_vi_indicators(df, percentile_window=vi_percentile_window)
 
         return df
 
@@ -144,11 +150,28 @@ class TechnicalIndicators:
         return df
 
     @staticmethod
-    def _add_vi_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    def _add_vi_indicators(
+        df: pd.DataFrame, percentile_window: int = DEFAULT_VI_PERCENTILE_WINDOW
+    ) -> pd.DataFrame:
         """VI（Volatility Index）関連の指標を計算"""
         if "vi" in df.columns and df["vi"].notna().any():
             df["vi_ma_10"] = df["vi"].rolling(window=10).mean()
             df["vi_std_10"] = df["vi"].rolling(window=10).std()
+
+            # 変動係数 CV = STD10 / MA10
+            # 絶対SDはVI水準に比例して大きくなるため、水準条件と重複してしまう。
+            # CVは水準に依存しないので「安定しているか」だけを見られる。
+            with np.errstate(divide="ignore", invalid="ignore"):
+                cv = df["vi_std_10"] / df["vi_ma_10"]
+            df["vi_cv_10"] = cv.replace([np.inf, -np.inf], np.nan)
+
+            # 直近 percentile_window 営業日におけるVIのパーセンタイル順位(%)
+            # 履歴が半分に満たない期間は NaN のままにし、相対判定を使わせない。
+            min_periods = max(20, percentile_window // 2)
+            df["vi_pct_1y"] = (
+                df["vi"].rolling(window=percentile_window, min_periods=min_periods).rank(pct=True)
+                * 100
+            )
 
             # VIの傾き（10日間の線形回帰）
             vi_slope = []
@@ -174,6 +197,8 @@ class TechnicalIndicators:
             df["vi_ma_10"] = np.nan
             df["vi_std_10"] = np.nan
             df["vi_slope_10"] = np.nan
+            df["vi_cv_10"] = np.nan
+            df["vi_pct_1y"] = np.nan
 
         return df
 
@@ -212,19 +237,56 @@ class SignalDetector:
 
         config = self.config["gate_vi"]
 
+        def _value(key: str) -> Optional[float]:
+            val = row.get(key)
+            return None if val is None or pd.isna(val) else float(val)
+
+        vi = _value("vi")
+        vi_ma_10 = _value("vi_ma_10")
+        vi_std_10 = _value("vi_std_10")
+        vi_slope_10 = _value("vi_slope_10")
+        vi_cv_10 = _value("vi_cv_10")
+        vi_pct_1y = _value("vi_pct_1y")
+
+        mode = str(config.get("mode", "absolute")).lower()
+
         vi_values = {
-            "vi": float(row["vi"]) if not pd.isna(row["vi"]) else None,
-            "vi_ma_10": float(row["vi_ma_10"]) if not pd.isna(row["vi_ma_10"]) else None,
-            "vi_std_10": float(row["vi_std_10"]) if not pd.isna(row["vi_std_10"]) else None,
-            "vi_slope_10": float(row["vi_slope_10"]) if not pd.isna(row["vi_slope_10"]) else None,
+            "mode": mode,
+            "vi": vi,
+            "vi_ma_10": vi_ma_10,
+            "vi_std_10": vi_std_10,
+            "vi_slope_10": vi_slope_10,
+            "vi_cv_10": vi_cv_10,
+            "vi_pct_1y": vi_pct_1y,
         }
 
-        conditions = [
-            row["vi"] <= config["vi_threshold"],
-            row["vi_ma_10"] <= config["vi_10d_avg_threshold"],
-            row["vi_std_10"] <= config["vi_10d_std_threshold"],
-            row["vi_slope_10"] <= config["vi_10d_slope_threshold"],
-        ]
+        if mode == "hybrid":
+            # 水準: 絶対水準 OR 相対水準（どちらかを満たせばよい）
+            # 高VIレジームでは絶対水準が構造的に成立しないため、相対水準を主、絶対水準を保険とする。
+            absolute_ok = (
+                vi is not None
+                and vi_ma_10 is not None
+                and vi <= config["vi_threshold"]
+                and vi_ma_10 <= config["vi_10d_avg_threshold"]
+            )
+            # 履歴不足でパーセンタイル順位が出ない期間は絶対水準のみで判定する
+            relative_ok = (
+                vi_pct_1y is not None and vi_pct_1y <= config["vi_percentile_threshold"]
+            )
+            conditions = [
+                absolute_ok or relative_ok,
+                vi_cv_10 is not None and vi_cv_10 <= config["vi_10d_cv_threshold"],
+                vi_slope_10 is not None and vi_slope_10 <= config["vi_10d_slope_threshold"],
+            ]
+            vi_values["level_absolute"] = absolute_ok
+            vi_values["level_relative"] = relative_ok
+        else:
+            conditions = [
+                vi is not None and vi <= config["vi_threshold"],
+                vi_ma_10 is not None and vi_ma_10 <= config["vi_10d_avg_threshold"],
+                vi_std_10 is not None and vi_std_10 <= config["vi_10d_std_threshold"],
+                vi_slope_10 is not None and vi_slope_10 <= config["vi_10d_slope_threshold"],
+            ]
 
         return all(conditions), vi_values
 
