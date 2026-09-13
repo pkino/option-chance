@@ -109,23 +109,29 @@ SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
 ```yaml
 # オプション選定条件
 option_selection:
+  selection_mode: premium  # premium | delta（どちらを基準に銘柄を選ぶか）
   premium_range:
     min: 20  # 最小プレミアム（円）
     max: 40  # 最大プレミアム（円）
+  target_premium: 30
   dte_range:
-    min: 10  # 最小残存営業日
-    max: 30  # 最大残存営業日
+    min: 18  # 最小残存営業日
+    max: 28  # 最大残存営業日
+  # delta モード用（premium モードでは参考表示のみ）
   delta_range:
     min: -0.40
     max: -0.25
   target_delta: -0.30
 
-# Gate① VI安定条件
+# Gate① VI安定条件（hybrid = 絶対水準 OR 相対水準、かつ変動係数・傾き）
 gate_vi:
-  vi_threshold: 20
-  vi_10d_avg_threshold: 20
-  vi_10d_std_threshold: 1.5
-  vi_10d_slope_threshold: 0
+  mode: hybrid
+  vi_threshold: 25
+  vi_10d_avg_threshold: 25
+  vi_percentile_window: 252
+  vi_percentile_threshold: 40
+  vi_10d_cv_threshold: 0.10
+  vi_10d_slope_threshold: 0.15
 
 # その他の設定...
 ```
@@ -284,9 +290,18 @@ GitHubリポジトリの Settings > Secrets and variables > Actions で以下を
 
 ### オプション選定
 
-- プレミアム：20〜40円
-- 残存：10〜30営業日
+`selection_mode` でプレミアム基準とデルタ基準のどちらかを排他的に選ぶ。
+20〜40円のプットはデルタ -0.01〜-0.02 の超深いOTMで、デルタ -0.25〜-0.40 のプットは
+600〜1,000円。両者は別物なので、AND で両方を課すと候補が空になる
+（検証の詳細は `docs/gate_vi_validation.md` 4.2）。
+
+**premium モード（既定）**
+- プレミアム：20〜40円（目標: 30円に最も近い）
+- 残存：18〜28営業日
+
+**delta モード**
 - デルタ：-0.25〜-0.40（目標: -0.30に最も近い）
+- 残存：18〜28営業日
 
 ## トラブルシューティング
 

@@ -7,19 +7,31 @@ data_sources:
     timeout: 30
 
 # オプション選定条件（Tier B: コア戦略）
+# selection_mode で「何を基準に銘柄を選ぶか」を排他的に決める。
+#   premium = premium_range で絞り、target_premium に最も近い銘柄を選ぶ（本プロジェクトの本筋）
+#   delta   = delta_range で絞り、target_delta に最も近い銘柄を選ぶ
+# premium_range(20〜40円) と delta_range(-0.40〜-0.25) が指す銘柄は全く別物で、
+# 20〜40円のプットはデルタ -0.01〜-0.02 の超深いOTM。両方をANDで適用すると候補が空になる。
+# 詳細は docs/gate_vi_validation.md 4.2
 option_selection:
+  selection_mode: premium
+
   premium_range:
     min: 20  # 円
     max: 40  # 円
+  target_premium: 30  # 最も近いプレミアムを選択（premium モード）
+
   dte_range:  # Days To Expiration (営業日) ≒ 暦日25〜40日
     # セータの毒が回る前に決着をつけるため、残存期間を絞る
     # 短すぎ（<18d）はセータが急激に加速、長すぎ（>28d）はベガ感応度が鈍い
     min: 18
     max: 28
+
+  # delta モード用。premium モードでは判定に使わず、候補の参考情報として表示するのみ
   delta_range:
     min: -0.40
     max: -0.25
-  target_delta: -0.30  # 最も近いデルタを選択
+  target_delta: -0.30  # 最も近いデルタを選択（delta モード）
 
 # Gate① VI安定条件
 # mode: hybrid  = (絶対水準 OR 相対水準) かつ 変動係数CV かつ 傾き

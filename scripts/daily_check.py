@@ -14,6 +14,7 @@ from src.models.option import OptionData, MarketData
 from src.data_sources.jpx import JPXDataFetcher
 from src.data_sources.market_data import MarketDataFetcher
 from src.signals.gate import GateChecker, format_signal_for_notification
+from src.signals.selection import DELTA_MODE, select_candidates, selection_mode
 from src.notifiers.slack import SlackNotifier
 from src.history.store import DEFAULT_HISTORY_PATH, append_record, build_record
 
@@ -196,33 +197,20 @@ class DailyEntryChecker:
             # JPXから最新のオプションデータを取得
             options = self.jpx_fetcher.fetch_latest_options()
 
-            # Putオプションのみフィルタ
-            puts = [o for o in options if o.option_type == "Put"]
-
-            # 条件に合うものをフィルタ
             opt_config = self.config["option_selection"]
+            mode = selection_mode(opt_config)
+            target = (
+                opt_config["target_delta"] if mode == DELTA_MODE else opt_config["target_premium"]
+            )
+
+            # 条件に合うものを目標値に近い順で取得（プレミアム基準/デルタ基準は config で決まる）
             candidates = []
-
-            for opt in puts:
-                # プレミアム範囲
-                if not opt.is_in_premium_range(
-                    opt_config["premium_range"]["min"], opt_config["premium_range"]["max"]
-                ):
-                    continue
-
-                # DTE範囲
-                if not opt.is_in_dte_range(
-                    opt_config["dte_range"]["min"], opt_config["dte_range"]["max"]
-                ):
-                    continue
-
-                # デルタ範囲
-                if opt.delta and not opt.is_in_delta_range(
-                    opt_config["delta_range"]["min"], opt_config["delta_range"]["max"]
-                ):
-                    continue
-
-                # 候補に追加
+            for opt in select_candidates(options, opt_config):
+                distance = (
+                    opt.delta_distance_from_target(target)
+                    if mode == DELTA_MODE
+                    else opt.premium_distance_from_target(target)
+                )
                 candidates.append(
                     {
                         "strike": opt.strike,
@@ -231,16 +219,11 @@ class DailyEntryChecker:
                         "dte": opt.dte_business_days,
                         "expiry": opt.expiry,
                         "iv": opt.iv,
-                        "distance_from_target": opt.delta_distance_from_target(
-                            opt_config["target_delta"]
-                        ),
+                        "distance_from_target": distance,
                     }
                 )
 
-            # 目標デルタに近い順にソート
-            candidates.sort(key=lambda x: x.get("distance_from_target", 999))
-
-            print(f"  候補オプション: {len(candidates)} 件")
+            print(f"  候補オプション: {len(candidates)} 件（選定基準: {mode}）")
             return candidates
 
         except Exception as e:
