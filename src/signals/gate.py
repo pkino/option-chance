@@ -5,7 +5,11 @@ import numpy as np
 import pandas as pd
 
 from ..models.option import Signal, MarketData
-from ..indicators.technical import TechnicalIndicators, SignalDetector
+from ..indicators.technical import (
+    DEFAULT_VI_PERCENTILE_WINDOW,
+    SignalDetector,
+    TechnicalIndicators,
+)
 
 
 # technical_values に常時格納する指標列。
@@ -30,6 +34,8 @@ _TECHNICAL_VALUE_COLUMNS = [
     "vi_ma_10",
     "vi_std_10",
     "vi_slope_10",
+    "vi_cv_10",
+    "vi_pct_1y",
     "volume_ratio",
     "upper_wick_ratio",
     "lower_wick_ratio",
@@ -95,7 +101,12 @@ class GateChecker:
             events = self.config.get("events", [])
 
         # テクニカル指標を計算
-        df = TechnicalIndicators.calculate_all(market_data)
+        df = TechnicalIndicators.calculate_all(
+            market_data,
+            vi_percentile_window=self.config.get("gate_vi", {}).get(
+                "vi_percentile_window", DEFAULT_VI_PERCENTILE_WINDOW
+            ),
+        )
 
         # SignalDetectorを初期化
         detector = SignalDetector(df, self.config)
@@ -277,8 +288,18 @@ def format_signal_for_notification(signal: Signal) -> str:
     vi_status = '✓' if signal.gate_vi else '✗'
     lines.append(f"  ✅ Gate① VI安定: {vi_status}")
     if gate_vi_details and gate_vi_details.get("vi") is not None:
-        lines.append(f"     VI={gate_vi_details.get('vi'):.2f}, MA10={gate_vi_details.get('vi_ma_10'):.2f}, "
-                    f"STD10={gate_vi_details.get('vi_std_10'):.2f}, Slope10={gate_vi_details.get('vi_slope_10'):.3f}")
+        if gate_vi_details.get("mode") == "hybrid":
+            pct = gate_vi_details.get("vi_pct_1y")
+            rank = f"1年順位 {pct:.0f}%" if pct is not None else "1年順位 —（履歴不足）"
+            lines.append(f"     VI={gate_vi_details.get('vi'):.2f}（{rank}）, "
+                        f"MA10={_fmt(gate_vi_details.get('vi_ma_10'), '.2f')}, "
+                        f"CV10={_fmt(gate_vi_details.get('vi_cv_10'), '.3f')}, "
+                        f"Slope10={_fmt(gate_vi_details.get('vi_slope_10'), '.3f')}")
+        else:
+            lines.append(f"     VI={gate_vi_details.get('vi'):.2f}, "
+                        f"MA10={_fmt(gate_vi_details.get('vi_ma_10'), '.2f')}, "
+                        f"STD10={_fmt(gate_vi_details.get('vi_std_10'), '.2f')}, "
+                        f"Slope10={_fmt(gate_vi_details.get('vi_slope_10'), '.3f')}")
 
     # Gate② テクニカル (A)
     lines.append(f"  ✅ Gate② テクニカル (A): {'✓' if signal.gate_top_a else '✗'}")

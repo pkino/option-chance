@@ -58,26 +58,33 @@ def main():
     scenarios = []
 
     # --- Gate① ---
+    # 現行は hybrid（絶対水準 OR 相対水準 / CV / 傾き）。旧absoluteとの差も並べて見る。
     c = copy.deepcopy(base_config)
-    c["gate_vi"]["vi_threshold"] = 25
-    c["gate_vi"]["vi_10d_avg_threshold"] = 25
-    scenarios.append(("Gate1: VI threshold 20->25", c))
+    c["gate_vi"].update(
+        {"mode": "absolute", "vi_threshold": 20, "vi_10d_avg_threshold": 20,
+         "vi_10d_std_threshold": 1.5, "vi_10d_slope_threshold": 0.1}
+    )
+    scenarios.append(("Gate1: 旧absolute条件 (VI<=20/SD<=1.5)", c))
 
     c = copy.deepcopy(base_config)
-    c["gate_vi"]["vi_10d_slope_threshold"] = 0.1
-    scenarios.append(("Gate1: VI slope <=0 -> <=0.1", c))
+    c["gate_vi"]["vi_percentile_threshold"] = 30
+    scenarios.append(("Gate1: 1年順位 40% -> 30% (厳格化)", c))
+
+    c = copy.deepcopy(base_config)
+    c["gate_vi"]["vi_percentile_threshold"] = 50
+    scenarios.append(("Gate1: 1年順位 40% -> 50% (緩和)", c))
+
+    c = copy.deepcopy(base_config)
+    c["gate_vi"]["vi_10d_cv_threshold"] = 0.08
+    scenarios.append(("Gate1: CV 0.10 -> 0.08 (厳格化)", c))
+
+    c = copy.deepcopy(base_config)
+    c["gate_vi"]["vi_10d_cv_threshold"] = 0.15
+    scenarios.append(("Gate1: CV 0.10 -> 0.15 (緩和)", c))
 
     c = copy.deepcopy(base_config)
     c["gate_vi"]["vi_10d_slope_threshold"] = 0.5
-    scenarios.append(("Gate1: VI slope <=0 -> <=0.5 (大幅緩和)", c))
-
-    c = copy.deepcopy(base_config)
-    c["gate_vi"]["vi_10d_std_threshold"] = 2.0
-    scenarios.append(("Gate1: VI std 1.5 -> 2.0", c))
-
-    c = copy.deepcopy(base_config)
-    c["gate_vi"]["vi_10d_std_threshold"] = 3.0
-    scenarios.append(("Gate1: VI std 1.5 -> 3.0 (大幅緩和)", c))
+    scenarios.append(("Gate1: VI slope 0.15 -> 0.5 (大幅緩和)", c))
 
     # --- Gate②A ---
     c = copy.deepcopy(base_config)
@@ -115,10 +122,10 @@ def main():
 
     # --- Combined ---
     c = copy.deepcopy(base_config)
-    c["gate_vi"]["vi_10d_slope_threshold"] = 0.1
-    c["gate_vi"]["vi_10d_std_threshold"] = 2.0
+    c["gate_vi"]["vi_10d_slope_threshold"] = 0.5
+    c["gate_vi"]["vi_10d_cv_threshold"] = 0.15
     c["gate_top"]["technical"]["required_conditions"] = 1
-    scenarios.append(("【複合】slope+std緩和 & A2->1条件", c))
+    scenarios.append(("【複合】slope+CV緩和 & A2->1条件", c))
 
     c = copy.deepcopy(base_config)
     c["gate_vi"]["vi_10d_slope_threshold"] = 0.5
@@ -126,15 +133,14 @@ def main():
     scenarios.append(("【複合】slope大幅緩和 & A2->1条件", c))
 
     c = copy.deepcopy(base_config)
-    c["gate_vi"]["vi_threshold"] = 25
-    c["gate_vi"]["vi_10d_avg_threshold"] = 25
-    c["gate_vi"]["vi_10d_slope_threshold"] = 0.1
-    c["gate_vi"]["vi_10d_std_threshold"] = 2.0
+    c["gate_vi"]["vi_percentile_threshold"] = 50
+    c["gate_vi"]["vi_10d_slope_threshold"] = 0.5
+    c["gate_vi"]["vi_10d_cv_threshold"] = 0.15
     c["gate_top"]["technical"]["required_conditions"] = 1
     scenarios.append(("【複合】VI緩和+slope+std+A2->1", c))
 
     print("Gate①条件の変更:")
-    gate1_scenarios = scenarios[:5]
+    gate1_scenarios = scenarios[:6]
     for name, cfg in gate1_scenarios:
         r = run_with_config(cfg, data)
         d = r["entry"] - base["entry"]
@@ -146,7 +152,7 @@ def main():
 
     print()
     print("Gate②A条件の変更:")
-    gate2a_scenarios = scenarios[5:11]
+    gate2a_scenarios = scenarios[6:12]
     for name, cfg in gate2a_scenarios:
         r = run_with_config(cfg, data)
         d = r["entry"] - base["entry"]
@@ -158,7 +164,7 @@ def main():
 
     print()
     print("Gate②B条件の変更:")
-    gate2b_scenarios = scenarios[11:13]
+    gate2b_scenarios = scenarios[12:14]
     for name, cfg in gate2b_scenarios:
         r = run_with_config(cfg, data)
         d = r["entry"] - base["entry"]
@@ -170,7 +176,7 @@ def main():
 
     print()
     print("複合変更 (複数条件を同時に緩和):")
-    combined_scenarios = scenarios[13:]
+    combined_scenarios = scenarios[14:]
     for name, cfg in combined_scenarios:
         r = run_with_config(cfg, data)
         d = r["entry"] - base["entry"]

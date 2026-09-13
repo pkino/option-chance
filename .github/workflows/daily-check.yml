@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       lookback_days:
-        description: '過去何日分のデータを取得するか'
+        description: '過去何日分のデータを取得するか（VIの1年順位に252営業日分が必要）'
         required: false
-        default: '60'
+        default: '420'
       send_no_signal:
         description: 'シグナルがない場合もSlackに通知する'
         required: false
@@ -44,7 +44,7 @@ jobs:
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
-          LOOKBACK_DAYS=${{ github.event.inputs.lookback_days || '60' }}
+          LOOKBACK_DAYS=${{ github.event.inputs.lookback_days || '420' }}
           SEND_NO_SIGNAL=${{ github.event.inputs.send_no_signal || 'false' }}
 
           if [ "$SEND_NO_SIGNAL" = "true" ]; then

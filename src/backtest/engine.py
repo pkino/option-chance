@@ -6,6 +6,28 @@ import pandas as pd
 
 from ..models.option import MarketData, OptionData, Signal, Trade
 from ..signals.gate import GateChecker
+from ..signals.selection import select_best
+
+
+def _business_days_after(
+    start: date, n_business_days: int, market_data_dict: Dict[date, MarketData]
+) -> date:
+    """start から n 営業日後の日付を返す。
+
+    市場データが存在する日付を営業日とみなす。暦日で数えると週末を挟んだときに
+    実質3営業日になってしまうため、ここは必ず営業日で数える。
+    市場データが尽きている場合のみ、暦日（営業日 ≒ 暦日 * 5/7）で近似する。
+    """
+    if n_business_days <= 0:
+        return start
+
+    future = sorted(d for d in market_data_dict if d > start)
+    if len(future) >= n_business_days:
+        return future[n_business_days - 1]
+    if future:
+        # データ末尾まで到達。それ以上は進めないので最終営業日で打ち切る
+        return future[-1]
+    return start + timedelta(days=-(-n_business_days * 7 // 5))
 
 
 class BacktestEngine:
@@ -135,42 +157,7 @@ class BacktestEngine:
         Returns:
             選択されたオプション or None
         """
-        opt_config = self.config["option_selection"]
-
-        # Putのみ
-        puts = [o for o in options if o.option_type == "Put"]
-
-        # フィルタリング
-        candidates = []
-        for opt in puts:
-            # プレミアム範囲
-            if not opt.is_in_premium_range(
-                opt_config["premium_range"]["min"], opt_config["premium_range"]["max"]
-            ):
-                continue
-
-            # DTE範囲
-            if not opt.is_in_dte_range(
-                opt_config["dte_range"]["min"], opt_config["dte_range"]["max"]
-            ):
-                continue
-
-            # デルタ範囲
-            if opt.delta and not opt.is_in_delta_range(
-                opt_config["delta_range"]["min"], opt_config["delta_range"]["max"]
-            ):
-                continue
-
-            candidates.append(opt)
-
-        if not candidates:
-            return None
-
-        # 目標デルタに最も近いものを選択
-        target_delta = opt_config["target_delta"]
-        candidates.sort(key=lambda x: x.delta_distance_from_target(target_delta) or 999)
-
-        return candidates[0]
+        return select_best(options, self.config["option_selection"])
 
     def _simulate_exit(
         self,
@@ -194,8 +181,8 @@ class BacktestEngine:
         exit_config = self.config["exit_rules"]
         time_stop_days = exit_config["stop_loss"]["time_based_days"]
 
-        # 時間損切り日
-        time_stop_date = entry_date + timedelta(days=time_stop_days)
+        # 時間損切り日（config の time_based_days は営業日）
+        time_stop_date = _business_days_after(entry_date, time_stop_days, market_data_dict)
 
         # 現在の最高価格（2倍利確用）
         entry_premium = option.premium or 0

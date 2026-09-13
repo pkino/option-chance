@@ -78,6 +78,12 @@ class OptionData:
             return None
         return abs(self.delta - target_delta)
 
+    def premium_distance_from_target(self, target_premium: float) -> Optional[float]:
+        """目標プレミアムからの距離"""
+        if self.premium is None:
+            return None
+        return abs(self.premium - target_premium)
+
 
 @dataclass
 class MarketData:
