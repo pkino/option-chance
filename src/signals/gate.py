@@ -42,6 +42,9 @@ _TECHNICAL_VALUE_COLUMNS = [
     "vi_cv_10",
     "vi_pct_1y",
     "volume_ratio",
+    "range_ratio",
+    "atr_5",
+    "atr_20",
     "upper_wick_ratio",
     "lower_wick_ratio",
     "body_ratio",
@@ -77,6 +80,19 @@ def _collect_technical_values(df: pd.DataFrame, idx: int) -> Dict[str, Any]:
     values["prev_low"] = _to_plain(df.iloc[idx - 1]["low"]) if idx > 0 else None
 
     return values
+
+
+def _collect_data_quality(df: pd.DataFrame, idx: int) -> Dict[str, bool]:
+    """判定に使えたデータの有無。欠けていると一部の条件が代替指標や終値で判定される。"""
+    row = df.iloc[idx]
+
+    def _present(col: str) -> bool:
+        return col in df.columns and not pd.isna(row.get(col))
+
+    return {
+        "volume_available": _present("volume_ratio"),
+        "vi_ohlc_available": _present("vi_open") and _present("vi_high") and _present("vi_low"),
+    }
 
 
 class GateChecker:
@@ -192,7 +208,12 @@ class GateChecker:
             "gate_top_c": {"satisfied": gate_top_c, **details_c},
             "trigger": {"satisfied": trigger, **details_trigger},
             "technical_values": _collect_technical_values(df, idx),
+            "data_quality": _collect_data_quality(df, idx),
         }
+        # B4 の上昇率（VIの直近安値比）は設定の lookback に依存するので判定結果から取る
+        details["technical_values"]["vi_rise"] = _to_plain(
+            details_b.get("b4_values", {}).get("vi_rise")
+        )
 
         signal = Signal(
             date=signal_date,
@@ -273,6 +294,8 @@ def _fmt(val, spec: str) -> str:
     return str(val)
 
 
+_B1_PROXY_LABELS = {"volume": "出来高", "range": "値幅"}
+
 _VI_PRICE_LABELS = {"close": "終値", "open": "始値", "median4": "四本値中央値"}
 
 
@@ -351,10 +374,15 @@ def format_signal_for_notification(signal: Signal) -> str:
     # Gate② 需給 (B)
     lines.append(f"  ✅ Gate② 需給 (B): {'✓' if signal.gate_top_b else '✗'}")
     details_b = signal.details.get("gate_top_b", {})
-    if details_b.get("b1_volume_failure"):
-        b1_vals = details_b.get("b1_values", {})
-        lines.append(f"     B1(出来高不全): Volume比={_fmt(b1_vals.get('volume_ratio', 'N/A'), '.2f')}, "
-                    f"高値距離%={_fmt(b1_vals.get('distance_from_high_20_pct', 'N/A'), '.2f')}")
+    b1_vals = details_b.get("b1_values", {})
+    if b1_vals:
+        b1_mark = "✓" if details_b.get("b1_volume_failure") else "✗"
+        if not b1_vals.get("available", True):
+            lines.append(f"     B1(高値圏の失速): 判定不能（{_B1_PROXY_LABELS.get(b1_vals.get('proxy_used'), '')}データなし）")
+        else:
+            lines.append(f"     B1(高値圏の失速・{_B1_PROXY_LABELS.get(b1_vals.get('proxy_used'), '出来高')}): {b1_mark} "
+                        f"5日/20日比={_fmt(b1_vals.get('ratio'), '.2f')}, "
+                        f"高値距離%={_fmt(b1_vals.get('distance_from_high_20_pct'), '.2f')}")
     if details_b.get("b2_upper_wick_dominance"):
         b2_vals = details_b.get("b2_values", {})
         wick_ratios = b2_vals.get('upper_wick_ratios', [])
@@ -366,6 +394,12 @@ def format_signal_for_notification(signal: Signal) -> str:
         lines.append(f"     B3(寄り天): Open={_fmt(b3_vals.get('open', 'N/A'), '.2f')}, "
                     f"Close={_fmt(b3_vals.get('close', 'N/A'), '.2f')}, "
                     f"前日高値={_fmt(b3_vals.get('prev_high', 'N/A'), '.2f')}, Gap%={_fmt(b3_vals.get('gap_pct', 'N/A'), '.2f')}")
+    if details_b.get("b4_vi_divergence"):
+        b4_vals = details_b.get("b4_values", {})
+        counted = "" if details_b.get("b4_counted") else "・記録のみ"
+        lines.append(f"     B4(VI逆行{counted}): VI={_fmt(b4_vals.get('vi'), '.2f')}, "
+                    f"直近安値={_fmt(b4_vals.get('vi_min'), '.2f')}, "
+                    f"上昇率={_fmt((b4_vals.get('vi_rise') or 0) * 100, '.0f')}%")
 
     # Gate② マクロ (C)
     lines.append(f"  {'✅' if signal.gate_top_c else '  '} Gate② マクロ (C): {'✓ 強い天井示唆' if signal.gate_top_c else '✗'}")

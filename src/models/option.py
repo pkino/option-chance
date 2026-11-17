@@ -152,6 +152,8 @@ class Signal:
             bool(b_details.get("b1_volume_failure", False)),
             bool(b_details.get("b2_upper_wick_dominance", False)),
             bool(b_details.get("b3_gap_up_failure", False)),
+            # B4（VI逆行）は active のときだけ数える（record_only では記録のみ）
+            bool(b_details.get("b4_vi_divergence", False) and b_details.get("b4_counted", False)),
         ])
         return self.gate_vi and b_count >= 2 and self.trigger
 

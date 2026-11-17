@@ -77,11 +77,16 @@ def build_record(
             "b1": bool(details_b.get("b1_volume_failure", False)),
             "b2": bool(details_b.get("b2_upper_wick_dominance", False)),
             "b3": bool(details_b.get("b3_gap_up_failure", False)),
+            "b4": bool(details_b.get("b4_vi_divergence", False)),
             "c1": bool(details_c.get("c1_event_proximity", False)),
             "prev_low_break": bool(details_trigger.get("prev_low_break", False)),
             "ma5_break": bool(details_trigger.get("ma5_break", False)),
         },
         "metrics": dict(details.get("technical_values", {})),
+        # 判定に使えたデータの有無（古いレコードには無い＝不明）
+        "data_quality": dict(details.get("data_quality", {})),
+        # B1 をどの指標で判定したか（volume / range）
+        "b1_proxy": details_b.get("b1_values", {}).get("proxy_used"),
         "config_hash": compute_config_hash(config),
         "thresholds": extract_thresholds(config),
     }

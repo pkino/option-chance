@@ -81,9 +81,10 @@ CONDITION_ROWS = [
     ("sub", "a3", "A3 ダイバージェンス"),
     ("sub", "a4", "A4 伸び切り"),
     ("flags", "gate_top_b", "Gate②B 需給"),
-    ("sub", "b1", "B1 出来高失速"),
+    ("sub", "b1", "B1 高値圏の失速（出来高/値幅）"),
     ("sub", "b2", "B2 上ヒゲ優勢"),
     ("sub", "b3", "B3 寄り天"),
+    ("sub", "b4", "B4 VI逆行"),
     ("flags", "gate_top_c", "Gate②C マクロ"),
     ("flags", "trigger", "Trigger③"),
     ("sub", "prev_low_break", "③a 前日安値割れ"),
@@ -100,7 +101,8 @@ TABLE_METRICS = [
     ("vi_pct_1y", "VI 1年順位%", ".0f"),
     ("vi_cv_10", "VI CV10", ".3f"),
     ("vi_slope_10", "VI Slope10", ".3f"),
-    ("volume_ratio", "出来高比", ".2f"),
+    ("range_ratio", "値幅比", ".2f"),
+    ("vi_rise", "VI上昇率", ".2f"),
     ("upper_wick_ratio", "上ヒゲ比", ".2f"),
 ]
 
@@ -259,7 +261,10 @@ def build_condition_heatmap(records: List[Dict[str, Any]]) -> go.Figure:
     dates = [r["date"] for r in records]
 
     z, labels, text = [], [], []
+    b4_mode = _threshold_text(records, "gate_top", "supply_demand", "vi_divergence", "mode")
     for section, key, label in SIGNAL_ROWS + CONDITION_ROWS:
+        if key == "b4" and b4_mode == "record_only":
+            label = f"{label}（記録のみ）"
         on_value = 2 if (section, key, label) in SIGNAL_ROWS else 1
         values = [on_value if r.get(section, {}).get(key) else 0 for r in records]
         z.append(values)
@@ -530,7 +535,7 @@ def build_hero(records: List[Dict[str, Any]]) -> str:
         for name, note_, ok in gates
     )
 
-    vi = _metric(latest, "vi")
+    vi = _vi_gate_series([latest])[0]
     vi_threshold = _threshold_value(records, "gate_vi", "vi_threshold")
     vi_pct = _metric(latest, "vi_pct_1y")
     pct_threshold = _threshold_value(records, "gate_vi", "vi_percentile_threshold")
@@ -552,7 +557,7 @@ def build_hero(records: List[Dict[str, Any]]) -> str:
     probe_days = sum(1 for r in records if r.get("flags", {}).get("is_probe_signal"))
 
     tiles = [
-        ("VI", _fmt(vi, ".2f"), vi_note),
+        ("VI判定値", _fmt(vi, ".2f"), vi_note),
         ("RSI", _fmt(rsi, ".1f"), rsi_note),
         ("終値", _fmt(_metric(latest, "close"), ",.0f"), f"MA5 {_fmt(_metric(latest, 'ma_5'), ',.0f')}"),
         ("期間内のシグナル", f"{entry_days} / {probe_days}", "エントリー / 打診"),

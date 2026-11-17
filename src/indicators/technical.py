@@ -15,6 +15,12 @@ DEFAULT_VI_PERCENTILE_WINDOW = 252
 # 2026年以降、日経VIの終値が引け際に当日安値まで急落する日が頻発しており、
 # 終値だけで10日SDやパーセンタイルを取るとノイズで判定が崩れる（docs/gate_vi_validation.md 7章）。
 VI_PRICE_MODES = ("close", "open", "median4")
+
+# B1 で使う指標（config の gate_top.supply_demand.volume_failure.proxy）
+VOLUME_FAILURE_PROXIES = ("volume", "range", "auto")
+# B4 VI逆行の扱い（config の gate_top.supply_demand.vi_divergence.mode）
+#   off = 判定しない / record_only = 記録のみ（Bの成立に数えない）/ active = Bの条件として数える
+VI_DIVERGENCE_MODES = ("off", "record_only", "active")
 DEFAULT_VI_PRICE = "close"
 _VI_OHLC_COLUMNS = ["vi", "vi_open", "vi_high", "vi_low"]
 
@@ -68,6 +74,7 @@ class TechnicalIndicators:
         df = TechnicalIndicators._add_bollinger_bands(df, period=25, std_dev=2)
         df = TechnicalIndicators._add_moving_averages(df, periods=[5, 20, 25])
         df = TechnicalIndicators._add_volume_indicators(df)
+        df = TechnicalIndicators._add_range_indicators(df)
         df = TechnicalIndicators._add_price_patterns(df)
         df = TechnicalIndicators._add_vi_indicators(
             df, percentile_window=vi_percentile_window, vi_price=vi_price
@@ -141,6 +148,30 @@ class TechnicalIndicators:
             df["volume_ma_20"] = np.nan
             df["volume_ratio"] = np.nan
 
+        return df
+
+    @staticmethod
+    def _add_range_indicators(df: pd.DataFrame, short: int = 5, long: int = 20) -> pd.DataFrame:
+        """値幅（真の値幅 True Range）関連の指標。B1 で出来高の代わりに使う。
+
+        range_ratio = 直近5日の平均値幅 / 直近20日の平均値幅。
+        高値圏で値動きが細るのは買いの勢いが尽きてきたサインで、出来高の減少と意味が近い。
+        """
+        prev_close = df["close"].shift(1)
+        true_range = pd.concat(
+            [
+                df["high"] - df["low"],
+                (df["high"] - prev_close).abs(),
+                (df["low"] - prev_close).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        df["true_range"] = true_range
+        df["atr_5"] = true_range.rolling(window=short).mean()
+        df["atr_20"] = true_range.rolling(window=long).mean()
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = df["atr_5"] / df["atr_20"]
+        df["range_ratio"] = ratio.replace([np.inf, -np.inf], np.nan)
         return df
 
     @staticmethod
@@ -553,37 +584,116 @@ class SignalDetector:
         signals["b3_gap_up_failure"] = b3_result
         signals["b3_values"] = b3_values
 
+        # B4: VI逆行。record_only の間は記録するだけで、Bの成立判定には数えない
+        b4_result, b4_values = self._check_vi_divergence(idx)
+        b4_counted = b4_values.get("mode") == "active"
+        signals["b4_vi_divergence"] = b4_result
+        signals["b4_values"] = b4_values
+        signals["b4_counted"] = b4_counted
+
         # 1つ以上の条件が成立
-        true_count = sum([b1_result, b2_result, b3_result])
+        true_count = sum([b1_result, b2_result, b3_result, b4_result and b4_counted])
         is_satisfied = true_count >= config["required_conditions"]
 
         return is_satisfied, signals
 
     def _check_volume_failure(self, idx: int) -> tuple[bool, dict]:
-        """B1: 高値圏の出来高失速"""
+        """B1: 高値圏の失速（出来高、または出来高の代わりに値幅）
+
+        proxy（config の volume_failure.proxy）:
+          volume = 出来高の 5日平均/20日平均。出来高データが無ければ判定不能（False）
+          range  = 真の値幅の 5日平均/20日平均
+          auto   = 出来高があれば volume、無ければ range（既定）
+        日経公式CSVには出来高が無いため、実運用では range で判定される。
+        """
         row = self.df.iloc[idx]
-
-        # 出来高データがない場合はFalse
-        if pd.isna(row.get("volume_ratio")):
-            return False, {}
-
         config = self.config["gate_top"]["supply_demand"]["volume_failure"]
+        proxy = str(config.get("proxy", "volume")).lower()
+        if proxy not in VOLUME_FAILURE_PROXIES:
+            raise ValueError(
+                "gate_top.supply_demand.volume_failure.proxy は "
+                f"{', '.join(VOLUME_FAILURE_PROXIES)} のいずれかを指定してください: {proxy!r}"
+            )
 
-        volume_ratio = float(row["volume_ratio"])
+        volume_ratio = row.get("volume_ratio")
+        volume_available = volume_ratio is not None and not pd.isna(volume_ratio)
+        if proxy == "auto":
+            used = "volume" if volume_available else "range"
+        else:
+            used = proxy
+
+        ratio = volume_ratio if used == "volume" else row.get("range_ratio")
+        if ratio is None or pd.isna(ratio):
+            # 出来高モードで出来高が無い、または値幅の計算期間が足りない
+            return False, {
+                "proxy": proxy,
+                "proxy_used": used,
+                "available": False,
+                "volume_available": volume_available,
+            }
+
         distance_from_high_20_pct = float(row["distance_from_high_20_pct"])
-
         values = {
-            "volume_ratio": volume_ratio,
+            "proxy": proxy,
+            "proxy_used": used,
+            "available": True,
+            "volume_available": volume_available,
+            "ratio": float(ratio),
+            "volume_ratio": float(volume_ratio) if volume_available else None,
             "distance_from_high_20_pct": distance_from_high_20_pct,
         }
 
-        # 出来高比率の低下
-        volume_declining = row["volume_ratio"] <= config["ratio_threshold"]
+        # 出来高（または値幅）比率の低下
+        declining = float(ratio) <= config["ratio_threshold"]
 
         # 高値圏（直近20営業日高値の99%以内）
-        in_high_range = row["distance_from_high_20_pct"] >= (config["high_proximity"] - 1) * 100
+        in_high_range = distance_from_high_20_pct >= (config["high_proximity"] - 1) * 100
 
-        return volume_declining and in_high_range, values
+        return bool(declining and in_high_range), values
+
+    def _check_vi_divergence(self, idx: int) -> tuple[bool, dict]:
+        """B4: VI逆行（株価は高値圏なのに、VIが直近の安値から上昇している）
+
+        通常、株価が高値を取りに行く局面ではVIは下がる。それでもVIが上がるのは
+        プットの需要（下落への備え）が増えているサインで、オプション市場側の需給を表す。
+        VIは Gate① と同じ判定値（vi_gate）を使い、終値の引け際ノイズを避ける。
+        """
+        config = self.config["gate_top"]["supply_demand"].get("vi_divergence") or {}
+        mode = str(config.get("mode", "off")).lower()
+        if mode not in VI_DIVERGENCE_MODES:
+            raise ValueError(
+                "gate_top.supply_demand.vi_divergence.mode は "
+                f"{', '.join(VI_DIVERGENCE_MODES)} のいずれかを指定してください: {mode!r}"
+            )
+        if mode == "off":
+            return False, {"mode": mode}
+
+        lookback = int(config.get("lookback_days", 5))
+        rise_threshold = float(config.get("rise_threshold", 0.15))
+        near_high_ratio = float(config.get("near_high_ratio", 0.98))
+
+        vi_col = "vi_gate" if "vi_gate" in self.df.columns else "vi"
+        if vi_col not in self.df.columns or idx < lookback - 1:
+            return False, {"mode": mode}
+
+        row = self.df.iloc[idx]
+        window = self.df[vi_col].iloc[idx - lookback + 1 : idx + 1].astype(float)
+        vi_now = row.get(vi_col)
+        vi_min = window.min()
+        close_max_20 = row.get("close_max_20")
+        if pd.isna(vi_now) or pd.isna(vi_min) or vi_min <= 0 or pd.isna(close_max_20):
+            return False, {"mode": mode}
+
+        vi_rise = float(vi_now) / float(vi_min) - 1
+        near_high = float(row["close"]) >= float(close_max_20) * near_high_ratio
+        values = {
+            "mode": mode,
+            "vi": float(vi_now),
+            "vi_min": float(vi_min),
+            "vi_rise": vi_rise,
+            "near_high": bool(near_high),
+        }
+        return bool(near_high and vi_rise >= rise_threshold), values
 
     def _check_upper_wick_dominance(self, idx: int) -> tuple[bool, dict]:
         """B2: 上ヒゲ優勢"""

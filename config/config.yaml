@@ -100,8 +100,13 @@ gate_top:
   supply_demand:
     required_conditions: 1
 
-    # B1: 高値圏の出来高失速
+    # B1: 高値圏の失速（出来高、または値幅）
+    # 日経公式CSVには出来高が無く、出来高ベースのB1は一度も成立し得なかった。
+    # proxy: volume（出来高のみ）| range（真の値幅 ATR5/ATR20）| auto（出来高があれば出来高、無ければ値幅）
+    # 2023〜2026年の実データで、高値圏かつ値幅比<=0.85の日は10営業日以内に-5%下落する割合が
+    # 16.9%（高値圏全体は9.5%）。高値圏で値動きが細るのは買いの勢いが尽きてきたサイン
     volume_failure:
+      proxy: auto
       short_period: 5
       long_period: 20
       ratio_threshold: 0.85  # 5日平均/20日平均 <= 0.85
@@ -117,6 +122,16 @@ gate_top:
     # B3: ギャップアップ失速
     gap_up_failure:
       gap_threshold: 1.002  # Open >= 前日High * 1.002
+
+    # B4: VI逆行（株価は高値圏なのに、VIが直近の安値から上昇）＝プット需要の増加
+    # mode: off | record_only（記録のみ。Bの成立に数えない）| active（Bの条件として数える）
+    # 2023〜2026年で8局面しかなく統計的な裏付けが弱いため、まず record_only で実績を蓄積する。
+    # 2026-10-06（天井 70,684円）当日に成立している
+    vi_divergence:
+      mode: record_only
+      lookback_days: 5        # 直近5営業日のVI判定値の最安値と比べる
+      rise_threshold: 0.15    # 最安値から+15%以上
+      near_high_ratio: 0.98   # 終値が直近20日の終値最高値の98%以上
 
   # C. ファンダ/マクロ（オプション：強化フラグ）
   macro:

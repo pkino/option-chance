@@ -98,6 +98,7 @@ class DailyEntryChecker:
                 latest_signal = signals[-1]
                 print(f"  最新シグナル日付: {latest_signal.date}")
                 self._warn_if_percentile_unavailable(latest_signal)
+                self._warn_data_quality(latest_signal)
             else:
                 print("  シグナルなし")
                 if self.slack_notifier and send_no_signal:
@@ -183,6 +184,21 @@ class DailyEntryChecker:
             f"Gate①は絶対水準のみで判定されます。--lookback-days を {window} 営業日"
             "以上が入る値に増やしてください。"
         )
+
+    def _warn_data_quality(self, signal) -> None:
+        """判定に使うデータが欠けて、代替指標や終値で判定されている場合に知らせる。"""
+        quality = signal.details.get("data_quality", {})
+        vi_price = self.config.get("gate_vi", {}).get("vi_price", "close")
+        if vi_price != "close" and not quality.get("vi_ohlc_available", True):
+            print(
+                f"  ⚠️ VIの四本値が取れませんでした（日経公式CSVの取得失敗など）。"
+                f"Gate①は {vi_price} ではなく終値で判定されています。"
+            )
+        b1 = signal.details.get("gate_top_b", {}).get("b1_values", {})
+        if b1 and not b1.get("available", True):
+            print("  ⚠️ B1（高値圏の失速）は判定に必要なデータが無く、判定不能です。")
+        elif b1.get("proxy_used") == "range" and b1.get("proxy") == "auto":
+            print("  ℹ️ 出来高データが無いため、B1は値幅（ATR5/ATR20）で判定しています。")
 
     def _fetch_market_data(self, lookback_days: int) -> List[MarketData]:
         """市場データを取得"""
