@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from ..models.option import Signal
+from ..signals.events import last_event_date, load_events
 
 # 履歴ファイルの既定パス（プロジェクトルート基準）
 DEFAULT_HISTORY_PATH = Path(__file__).parent.parent.parent / "history" / "signals.jsonl"
@@ -87,9 +88,19 @@ def build_record(
         "data_quality": dict(details.get("data_quality", {})),
         # B1 をどの指標で判定したか（volume / range）
         "b1_proxy": details_b.get("b1_values", {}).get("proxy_used"),
+        # イベントカレンダーの登録済み最終日（ダッシュボードで「更新が必要」を出すため）
+        "event_calendar_last": _event_calendar_last(config),
         "config_hash": compute_config_hash(config),
         "thresholds": extract_thresholds(config),
     }
+
+
+def _event_calendar_last(config: Dict[str, Any]) -> Optional[str]:
+    try:
+        last = last_event_date(load_events(config.get("events")))
+    except ValueError:
+        return None
+    return last.isoformat() if last else None
 
 
 def load_records(path: Union[str, Path] = DEFAULT_HISTORY_PATH) -> List[Dict[str, Any]]:

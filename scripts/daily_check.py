@@ -17,6 +17,7 @@ from src.signals.gate import GateChecker, format_signal_for_notification
 from src.signals.selection import DELTA_MODE, select_candidates, selection_mode
 from src.notifiers.slack import SlackNotifier
 from src.history.store import DEFAULT_HISTORY_PATH, append_record, build_record
+from src.signals.events import calendar_staleness, load_events
 
 # 取得期間。Gate① hybrid の「VIの1年順位」に252営業日分のVIが要るため、暦日で1年強を取る
 DEFAULT_LOOKBACK_DAYS = 420
@@ -76,6 +77,7 @@ class DailyEntryChecker:
         print("=" * 70)
         print("日次エントリーチェック開始")
         print("=" * 70)
+        self._warn_if_calendar_stale()
 
         try:
             # 1. 市場データを取得
@@ -184,6 +186,12 @@ class DailyEntryChecker:
             f"Gate①は絶対水準のみで判定されます。--lookback-days を {window} 営業日"
             "以上が入る値に増やしてください。"
         )
+
+    def _warn_if_calendar_stale(self) -> None:
+        """イベントカレンダーの登録が尽きかけていたら警告する（2025年のまま放置された反省）。"""
+        message = calendar_staleness(load_events(self.config.get("events")), date.today())
+        if message:
+            print(f"  ⚠️ {message}")
 
     def _warn_data_quality(self, signal) -> None:
         """判定に使うデータが欠けて、代替指標や終値で判定されている場合に知らせる。"""

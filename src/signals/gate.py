@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 
 from ..models.option import Signal, MarketData
+from .events import Event, load_events
 from ..indicators.technical import (
     DEFAULT_VI_PERCENTILE_WINDOW,
     DEFAULT_VI_PRICE,
@@ -120,6 +121,7 @@ class GateChecker:
         """
         if events is None:
             events = self.config.get("events", [])
+        events = load_events(events)
 
         # テクニカル指標を計算
         gate_vi_config = self.config.get("gate_vi", {})
@@ -406,7 +408,8 @@ def format_signal_for_notification(signal: Signal) -> str:
     details_c = signal.details.get("gate_top_c", {})
     if details_c.get("c1_event_proximity"):
         c1_vals = details_c.get("c1_values", {})
-        lines.append(f"     C1(イベント近接): 最接近イベント={c1_vals.get('nearest_event_date', 'N/A')}, "
+        lines.append(f"     C1(イベント近接): 最接近イベント={c1_vals.get('nearest_event_name', '')} "
+                    f"{c1_vals.get('nearest_event_date', 'N/A')}, "
                     f"残日数={c1_vals.get('days_until_event', 'N/A')}")
 
     # Trigger③

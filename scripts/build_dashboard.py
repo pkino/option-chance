@@ -23,6 +23,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from src.history.store import DEFAULT_HISTORY_PATH, load_records
+from src.signals.events import STALE_CALENDAR_DAYS
 
 DEFAULT_OUTPUT_PATH = project_root / "docs" / "index.html"
 
@@ -514,6 +515,22 @@ def _fmt(value: Optional[float], spec: str) -> str:
     return format(value, spec) if value is not None else "—"
 
 
+def data_warnings(record: Dict[str, Any]) -> List[str]:
+    """最新レコードから、判定の前提が崩れていることを示す注意書きを集める。"""
+    warnings = []
+    last = record.get("event_calendar_last")
+    if last:
+        remaining = (datetime.strptime(last, "%Y-%m-%d").date()
+                     - datetime.strptime(record["date"], "%Y-%m-%d").date()).days
+        if remaining < STALE_CALENDAR_DAYS:
+            warnings.append(f"イベントカレンダーが {last} までしか登録されていません。config の events を更新してください")
+    quality = record.get("data_quality", {})
+    vi_price = record.get("thresholds", {}).get("gate_vi", {}).get("vi_price", "close")
+    if vi_price != "close" and quality.get("vi_ohlc_available") is False:
+        warnings.append("VIの四本値が取れず、Gate①は終値で判定されています")
+    return warnings
+
+
 def build_hero(records: List[Dict[str, Any]]) -> str:
     """最新の判定状況。グラフを読む前に「今どうなっているか」を一目で示す。"""
     latest = records[-1]
@@ -569,6 +586,8 @@ def build_hero(records: List[Dict[str, Any]]) -> str:
         for lbl, val, note_ in tiles
     )
 
+    warnings_html = "".join(f'<p class="hero-warning">⚠️ {w}</p>' for w in data_warnings(latest))
+
     return f"""
     <section class="hero">
       <div class="hero-verdict">
@@ -576,6 +595,7 @@ def build_hero(records: List[Dict[str, Any]]) -> str:
         <div class="hero-status status-{status}"><span class="dot"></span>{label}</div>
         <p class="hero-note">{note}</p>
         <div class="chips">{chips}</div>
+        {warnings_html}
       </div>
       <div class="tiles">{tile_html}</div>
     </section>"""
@@ -822,6 +842,7 @@ def _stylesheet() -> str:
     font-size: 1.55rem; font-weight: 700; margin: 2px 0 4px; line-height: 1.25;
   }}
   .hero-status .dot {{ width: 11px; height: 11px; border-radius: 50%; flex: none; }}
+  .hero-warning {{ margin: 10px 0 0; color: var(--ink-2); font-size: .85rem; }}
   .status-critical {{ color: var(--critical); }}
   .status-critical .dot {{ background: var(--critical); }}
   .status-warning .dot {{ background: var(--warning); }}

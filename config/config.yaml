@@ -184,11 +184,79 @@ notifications:
     enabled: True
     webhook_env: "SLACK_WEBHOOK_URL"
 
-# イベント日付（手動管理）
-# フォーマット: YYYY-MM-DD
+# イベントカレンダー（手動管理）
+# 形式: {date: YYYY-MM-DD, name: 名前, tier: major|minor}（旧形式の "YYYY-MM-DD" も可。tier は major 扱い）
+#   major = FOMC・日銀会合・メジャーSQ・国政選挙など。イベント前打診（event_probe）と C1 の対象
+#   minor = 米CPI・米雇用統計・ミニSQなど。C1 の対象（打診の対象外）
+# date は「結果が出る日」の現地日付。FOMC は2日目（声明公表日、米国時間）、日銀会合は最終日。
+# 出典（2026-11-17 確認）:
+#   FOMC        https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm（各会合は直前の会合で確定）
+#   日銀会合    https://www.boj.or.jp/mopo/mpmsche_minu/index.htm（2027年分は 2026-07-31 公表）
+#   米CPI・雇用 https://www.bls.gov/schedule/news_release/cpi.htm / empsit.htm
+#   SQ          毎月第2金曜日（3・6・9・12月がメジャーSQ）。2027年は祝日との重なりなし
+# 登録済みの最終日まで30日を切ると daily_check とダッシュボードで警告が出る。年1回は更新すること。
+# 2027年は日米とも予定された国政選挙はない（解散総選挙などが決まったら追加する）。
 events:
-  # 例: 日銀会合、FOMC、CPI、メジャーSQなど
-  # - "2024-12-19"
-  # - "2024-12-20"
-  - "2025-12-17"
-  - "2025-12-18"
+  - {date: "2026-09-11", name: "メジャーSQ", tier: major}
+  - {date: "2026-09-16", name: "FOMC", tier: major}
+  - {date: "2026-09-18", name: "日銀会合", tier: major}
+  - {date: "2026-10-28", name: "FOMC", tier: major}
+  - {date: "2026-10-30", name: "日銀会合", tier: major}
+  - {date: "2026-11-03", name: "米中間選挙", tier: major}
+  - {date: "2026-12-04", name: "米雇用統計", tier: minor}
+  - {date: "2026-12-09", name: "FOMC", tier: major}
+  - {date: "2026-12-10", name: "米CPI", tier: minor}
+  - {date: "2026-12-11", name: "メジャーSQ", tier: major}
+  - {date: "2026-12-18", name: "日銀会合", tier: major}
+  - {date: "2027-01-08", name: "ミニSQ", tier: minor}
+  - {date: "2027-01-08", name: "米雇用統計", tier: minor}
+  - {date: "2027-01-13", name: "米CPI", tier: minor}
+  - {date: "2027-01-22", name: "日銀会合", tier: major}
+  - {date: "2027-01-27", name: "FOMC", tier: major}
+  - {date: "2027-02-05", name: "米雇用統計", tier: minor}
+  - {date: "2027-02-11", name: "米CPI", tier: minor}
+  - {date: "2027-02-12", name: "ミニSQ", tier: minor}
+  - {date: "2027-03-05", name: "米雇用統計", tier: minor}
+  - {date: "2027-03-10", name: "米CPI", tier: minor}
+  - {date: "2027-03-12", name: "メジャーSQ", tier: major}
+  - {date: "2027-03-17", name: "FOMC", tier: major}
+  - {date: "2027-03-18", name: "日銀会合", tier: major}
+  - {date: "2027-04-02", name: "米雇用統計", tier: minor}
+  - {date: "2027-04-09", name: "ミニSQ", tier: minor}
+  - {date: "2027-04-13", name: "米CPI", tier: minor}
+  - {date: "2027-04-28", name: "FOMC", tier: major}
+  - {date: "2027-04-28", name: "日銀会合", tier: major}
+  - {date: "2027-05-07", name: "米雇用統計", tier: minor}
+  - {date: "2027-05-12", name: "米CPI", tier: minor}
+  - {date: "2027-05-14", name: "ミニSQ", tier: minor}
+  - {date: "2027-06-04", name: "米雇用統計", tier: minor}
+  - {date: "2027-06-09", name: "FOMC", tier: major}
+  - {date: "2027-06-10", name: "米CPI", tier: minor}
+  - {date: "2027-06-11", name: "メジャーSQ", tier: major}
+  - {date: "2027-06-11", name: "日銀会合", tier: major}
+  - {date: "2027-07-02", name: "米雇用統計", tier: minor}
+  - {date: "2027-07-09", name: "ミニSQ", tier: minor}
+  - {date: "2027-07-14", name: "米CPI", tier: minor}
+  - {date: "2027-07-22", name: "日銀会合", tier: major}
+  - {date: "2027-07-28", name: "FOMC", tier: major}
+  - {date: "2027-08-06", name: "米雇用統計", tier: minor}
+  - {date: "2027-08-11", name: "米CPI", tier: minor}
+  - {date: "2027-08-13", name: "ミニSQ", tier: minor}
+  - {date: "2027-09-03", name: "米雇用統計", tier: minor}
+  - {date: "2027-09-10", name: "メジャーSQ", tier: major}
+  - {date: "2027-09-14", name: "米CPI", tier: minor}
+  - {date: "2027-09-15", name: "FOMC", tier: major}
+  - {date: "2027-09-22", name: "日銀会合", tier: major}
+  - {date: "2027-10-08", name: "ミニSQ", tier: minor}
+  - {date: "2027-10-08", name: "米雇用統計", tier: minor}
+  - {date: "2027-10-14", name: "米CPI", tier: minor}
+  - {date: "2027-10-27", name: "FOMC", tier: major}
+  - {date: "2027-10-29", name: "日銀会合", tier: major}
+  - {date: "2027-11-05", name: "米雇用統計", tier: minor}
+  - {date: "2027-11-10", name: "米CPI", tier: minor}
+  - {date: "2027-11-12", name: "ミニSQ", tier: minor}
+  - {date: "2027-11-17", name: "FOMC", tier: major}
+  - {date: "2027-12-03", name: "米雇用統計", tier: minor}
+  - {date: "2027-12-10", name: "メジャーSQ", tier: major}
+  - {date: "2027-12-10", name: "米CPI", tier: minor}
+  - {date: "2027-12-17", name: "日銀会合", tier: major}

@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 
 from ..models.option import MarketData
+from ..signals.events import load_events, upcoming_events
 
 # VIパーセンタイル順位の既定の参照期間（営業日）。config の gate_vi.vi_percentile_window で上書きされる
 DEFAULT_VI_PERCENTILE_WINDOW = 252
@@ -758,13 +759,13 @@ class SignalDetector:
 
         return has_gap_up and failed_to_hold, values
 
-    def detect_gate_top_c(self, idx: int, events: List[str] = []) -> tuple[bool, dict]:
+    def detect_gate_top_c(self, idx: int, events: Optional[List[Any]] = None) -> tuple[bool, dict]:
         """
         Gate② マクロ条件（C）をチェック（オプション）
 
         Args:
             idx: DataFrameのインデックス
-            events: イベント日付のリスト（YYYY-MM-DD）
+            events: イベント（config の events 形式、または Event のリスト）
 
         Returns:
             (条件を満たすか, 詳細情報)
@@ -779,7 +780,7 @@ class SignalDetector:
 
         # C1: イベント近接
         c1_result, c1_values = self._check_event_proximity(
-            current_date, events, lookforward_days
+            current_date, events or [], lookforward_days
         )
         signals["c1_event_proximity"] = c1_result
         signals["c1_values"] = c1_values
@@ -796,30 +797,25 @@ class SignalDetector:
         return is_satisfied, signals
 
     def _check_event_proximity(
-        self, current_date: pd.Timestamp, events: List[str], lookforward_days: int
+        self, current_date: pd.Timestamp, events: List[Any], lookforward_days: int
     ) -> tuple[bool, dict]:
-        """イベント近接チェック"""
-        if not events:
+        """イベント近接チェック（今日〜lookforward_days 暦日先。tier は問わない）"""
+        normalized = load_events(events)
+        if not normalized:
             return False, {}
 
-        event_dates = [pd.to_datetime(e) for e in events]
+        upcoming = upcoming_events(normalized, current_date.date(), 0, lookforward_days)
+        if not upcoming:
+            return False, {"nearest_event_date": None, "days_until_event": None}
 
-        nearest_event = None
-        min_days = float('inf')
-
-        for event_date in event_dates:
-            days_until_event = (event_date - current_date).days
-            if 0 <= days_until_event <= lookforward_days:
-                if days_until_event < min_days:
-                    min_days = days_until_event
-                    nearest_event = event_date.strftime('%Y-%m-%d')
-
+        event, days = upcoming[0]
         values = {
-            "nearest_event_date": nearest_event,
-            "days_until_event": int(min_days) if min_days != float('inf') else None,
+            "nearest_event_date": event.date.isoformat(),
+            "nearest_event_name": event.name,
+            "nearest_event_tier": event.tier,
+            "days_until_event": int(days),
         }
-
-        return nearest_event is not None, values
+        return True, values
 
     def detect_trigger(self, idx: int) -> tuple[bool, dict]:
         """
