@@ -143,6 +143,15 @@ trigger:
   prev_low_break: True
   ma5_break: True
 
+# イベント前打診（Gate① AND 1〜lookahead_days 暦日先に対象イベント。Gate②・Trigger③は不要）
+# 天井を作らずに起きるイベント起因の急落（例: 2026-11 米中間選挙後の -6%）は Gate② では捉えられない。
+# VIが落ち着いている（プットが割高でない）うちに、日程の決まった大型イベントの前に少額で仕込む。
+# 同じイベントでは窓内の最初の1日だけ発火し、クールダウン中は抑制する（それ自体はクールダウンの起点にしない）
+event_probe:
+  enabled: True
+  lookahead_days: 5   # 暦日（C1 の event_lookforward_days と同じ尺度）
+  tiers: [major]      # events の tier。minor（CPI・雇用統計など）は対象外
+
 # 退出ルール
 exit_rules:
   # 損切り

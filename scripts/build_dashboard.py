@@ -73,6 +73,7 @@ SIGNAL_ROWS = [
     ("flags", "is_entry_signal", "エントリー成立"),
     ("flags", "is_supply_dominant_entry", "需給主導エントリー"),
     ("flags", "is_probe_signal", "打診シグナル"),
+    ("flags", "is_event_probe_signal", "イベント前打診"),
 ]
 CONDITION_ROWS = [
     ("flags", "gate_vi", "Gate① VI安定"),
@@ -246,6 +247,13 @@ def describe_verdict(record: Dict[str, Any]) -> Tuple[str, str, str]:
         return "需給主導エントリー", "critical", "需給条件2つ以上とTrigger③が成立"
     if flags.get("is_probe_signal"):
         return "打診シグナル", "warning", "Gate①②は成立、Trigger③は未発火"
+    if flags.get("is_event_probe_signal"):
+        probe = record.get("event_probe", {})
+        note = (
+            f"{probe.get('event_name', 'イベント')} {probe.get('event_date', '')} の"
+            f"{probe.get('days_until_event', '?')}日前。Gate①成立"
+        )
+        return "イベント前打診", "warning", note
     return "待機中", "muted", "エントリー条件は未成立"
 
 
@@ -468,6 +476,7 @@ def build_price_chart(records: List[Dict[str, Any]]) -> go.Figure:
     for flag, label, color, symbol in (
         ("is_entry_signal", "エントリー", STATUS["critical"], "triangle-down"),
         ("is_probe_signal", "打診", STATUS["warning"], "circle"),
+        ("is_event_probe_signal", "イベント前打診", STATUS["warning"], "diamond"),
     ):
         marked = [r for r in records if r.get("flags", {}).get(flag)]
         if not marked:
@@ -572,12 +581,13 @@ def build_hero(records: List[Dict[str, Any]]) -> str:
 
     entry_days = sum(1 for r in records if r.get("flags", {}).get("is_entry_signal"))
     probe_days = sum(1 for r in records if r.get("flags", {}).get("is_probe_signal"))
+    event_days = sum(1 for r in records if r.get("flags", {}).get("is_event_probe_signal"))
 
     tiles = [
         ("VI判定値", _fmt(vi, ".2f"), vi_note),
         ("RSI", _fmt(rsi, ".1f"), rsi_note),
         ("終値", _fmt(_metric(latest, "close"), ",.0f"), f"MA5 {_fmt(_metric(latest, 'ma_5'), ',.0f')}"),
-        ("期間内のシグナル", f"{entry_days} / {probe_days}", "エントリー / 打診"),
+        ("期間内のシグナル", f"{entry_days} / {probe_days} / {event_days}", "エントリー / 打診 / イベント前"),
     ]
     tile_html = "".join(
         f'<div class="tile"><div class="tile-label">{lbl}</div>'

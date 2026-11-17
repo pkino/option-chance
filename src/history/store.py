@@ -19,7 +19,9 @@ DEFAULT_HISTORY_PATH = Path(__file__).parent.parent.parent / "history" / "signal
 
 # config.yaml のうち「判定条件」にあたるサブツリー。
 # ここが変わった日をダッシュボード上で識別できるよう、ハッシュを各レコードに残す。
-THRESHOLD_KEYS = ["gate_vi", "gate_top", "trigger", "risk_management", "option_selection"]
+THRESHOLD_KEYS = [
+    "gate_vi", "gate_top", "trigger", "event_probe", "risk_management", "option_selection",
+]
 
 
 def extract_thresholds(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -68,6 +70,7 @@ def build_record(
             "is_probe_signal": bool(signal.is_probe_signal),
             "is_supply_dominant_entry": bool(signal.is_supply_dominant_entry),
             "is_strong_signal": bool(signal.is_strong_signal),
+            "is_event_probe_signal": bool(signal.is_event_probe_signal),
             "cooldown_suppressed": bool(details.get("cooldown_suppressed", False)),
         },
         "sub": {
@@ -84,6 +87,8 @@ def build_record(
             "ma5_break": bool(details_trigger.get("ma5_break", False)),
         },
         "metrics": dict(details.get("technical_values", {})),
+        # イベント前打診の対象イベント（窓内に対象イベントが無い日は空）
+        "event_probe": dict(details.get("event_probe", {})),
         # 判定に使えたデータの有無（古いレコードには無い＝不明）
         "data_quality": dict(details.get("data_quality", {})),
         # B1 をどの指標で判定したか（volume / range）

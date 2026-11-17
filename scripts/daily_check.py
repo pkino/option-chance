@@ -13,7 +13,12 @@ import yaml
 from src.models.option import OptionData, MarketData
 from src.data_sources.jpx import JPXDataFetcher
 from src.data_sources.market_data import MarketDataFetcher
-from src.signals.gate import GateChecker, format_signal_for_notification
+from src.signals.gate import (
+    SIGNAL_KIND_LABELS,
+    GateChecker,
+    classify_signal,
+    format_signal_for_notification,
+)
 from src.signals.selection import DELTA_MODE, select_candidates, selection_mode
 from src.notifiers.slack import SlackNotifier
 from src.history.store import DEFAULT_HISTORY_PATH, append_record, build_record
@@ -72,7 +77,7 @@ class DailyEntryChecker:
             send_no_signal: シグナルがない場合もSlackに送信するか
 
         Returns:
-            エントリーシグナルが検出されたか
+            通知対象のシグナル（エントリー・需給主導・打診・イベント前打診）が検出されたか
         """
         print("=" * 70)
         print("日次エントリーチェック開始")
@@ -112,8 +117,9 @@ class DailyEntryChecker:
 
             # 3. エントリーシグナルをチェック
             print("\n[3/4] エントリーシグナルチェック中...")
-            if latest_signal.is_entry_signal:
-                print("  ✅ エントリーシグナル検出！")
+            kind = classify_signal(latest_signal)
+            if kind is not None:
+                print(f"  ✅ {SIGNAL_KIND_LABELS[kind]}検出！")
 
                 # 4. オプション候補を取得
                 print("\n[4/4] オプション候補を取得中...")
@@ -122,19 +128,20 @@ class DailyEntryChecker:
                 # 結果を表示
                 self._display_results(latest_signal, option_candidates)
 
-                # Slack通知
+                # Slack通知（エントリーだけでなく、需給主導・打診・イベント前打診も通知する）
                 if self.slack_notifier:
-                    self._send_slack_notification(latest_signal, option_candidates)
+                    self._send_slack_notification(kind, latest_signal, option_candidates)
 
                 return True
             else:
-                print("  ⚠️ エントリーシグナルなし")
+                print("  ⚠️ 通知対象のシグナルなし")
                 print(f"    - Gate① (VI): {latest_signal.gate_vi}")
                 print(f"    - Gate② (A): {latest_signal.gate_top_a}")
                 print(f"    - Gate② (B): {latest_signal.gate_top_b}")
                 print(f"    - Trigger③: {latest_signal.trigger}")
                 print(f"    - 打診シグナル: {latest_signal.is_probe_signal}")
                 print(f"    - 需給主導シグナル: {latest_signal.is_supply_dominant_entry}")
+                print(f"    - イベント前打診: {latest_signal.is_event_probe_signal}")
                 print(
                     f"    - クールダウン抑制: "
                     f"{latest_signal.details.get('cooldown_suppressed', False)}"
@@ -270,11 +277,11 @@ class DailyEntryChecker:
                     f"Delta={delta_str} | IV={iv_str} | DTE={opt['dte']}日 | Expiry={opt['expiry']}"
                 )
 
-    def _send_slack_notification(self, signal, option_candidates: List[dict]):
+    def _send_slack_notification(self, kind: str, signal, option_candidates: List[dict]):
         """Slack通知を送信"""
         try:
             signal_text = format_signal_for_notification(signal)
-            self.slack_notifier.send_entry_signal(signal_text, option_candidates)
+            self.slack_notifier.send_signal(kind, signal_text, option_candidates)
         except Exception as e:
             print(f"  ⚠️ Slack通知エラー: {e}")
 

@@ -59,19 +59,31 @@ class SlackNotifier:
             print(f"Slack通知送信エラー: {e}")
             return False
 
-    def send_entry_signal(self, signal_text: str, option_candidates: Optional[List[dict]] = None) -> bool:
+    # 種類ごとの見出し（gate.SIGNAL_KINDS と対応）
+    SIGNAL_HEADERS = {
+        "entry": "🔴 エントリーシグナル検出",
+        "supply": "🟠 需給主導エントリー検出",
+        "probe": "🟡 打診シグナル検出",
+        "event_probe": "🗓️ イベント前打診",
+    }
+
+    def send_signal(
+        self, kind: str, signal_text: str, option_candidates: Optional[List[dict]] = None
+    ) -> bool:
         """
-        エントリーシグナルを送信
+        シグナルを送信
 
         Args:
+            kind: entry / supply / probe / event_probe
             signal_text: シグナルの説明テキスト
             option_candidates: 候補オプションのリスト（オプション）
 
         Returns:
             成功したか
         """
+        header = self.SIGNAL_HEADERS.get(kind, "📊 シグナル検出")
         blocks = [
-            {"type": "header", "text": {"type": "plain_text", "text": "📊 エントリーシグナル検出"}},
+            {"type": "header", "text": {"type": "plain_text", "text": header}},
             {"type": "section", "text": {"type": "mrkdwn", "text": signal_text}},
         ]
 
@@ -86,15 +98,20 @@ class SlackNotifier:
             )
 
             for opt in option_candidates[:5]:  # 最大5つ
+                premium = opt.get("premium")
                 opt_text = (
                     f"• Strike: {opt.get('strike')} | "
-                    f"Premium: {opt.get('premium'):.2f}円 | "
+                    f"Premium: {f'{premium:.2f}' if premium is not None else 'N/A'}円 | "
                     f"Delta: {opt.get('delta', 'N/A')} | "
                     f"DTE: {opt.get('dte')}日"
                 )
                 blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": opt_text}})
 
-        return self.send_message(text="エントリーシグナル検出", blocks=blocks)
+        return self.send_message(text=header, blocks=blocks)
+
+    def send_entry_signal(self, signal_text: str, option_candidates: Optional[List[dict]] = None) -> bool:
+        """エントリーシグナルを送信（互換用。send_signal("entry", ...) と同じ）"""
+        return self.send_signal("entry", signal_text, option_candidates)
 
     def send_no_signal(self, date_str: str) -> bool:
         """

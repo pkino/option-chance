@@ -162,6 +162,21 @@ class Signal:
         """強いシグナルか（C_TRUEも含む）"""
         return self.is_entry_signal and self.gate_top_c
 
+    @property
+    def is_event_probe_signal(self) -> bool:
+        """イベント前打診（Gate① AND 1〜N暦日先に major イベント。Gate②・Trigger③は不要）
+
+        天井を作らずに起きるイベント起因の急落（例: 2026-11 米中間選挙後の -6%）は
+        Gate② では捉えられない。VIが落ち着いている（＝プットが割高でない）うちに、
+        日程の決まっている大型イベントの前に少額で仕込む。
+        同じイベントでは窓内の最初の1日だけ発火し、クールダウン中は抑制される
+        （判定は GateChecker.check_all_gates が details["event_probe"] に書き込む）。
+        通常のエントリー・需給主導・打診が同じ日に出ている場合はそちらを優先する。
+        """
+        if not self.details.get("event_probe", {}).get("fires", False):
+            return False
+        return not (self.is_entry_signal or self.is_supply_dominant_entry or self.is_probe_signal)
+
 
 @dataclass
 class Trade:
