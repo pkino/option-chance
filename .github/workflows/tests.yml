@@ -1,0 +1,31 @@
+name: Tests
+
+# PR ごとにユニットテストを実行する（日次判定の daily-check.yml とは別）
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      # requirements.txt には streamlit・ta などテストに不要な重い依存があるため、テストに必要なものだけ入れる
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas numpy pyyaml requests plotly pytest
+
+      - name: Run tests
+        run: python -m pytest tests/ -q

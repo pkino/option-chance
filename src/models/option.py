@@ -150,7 +150,8 @@ class Signal:
         b_details = self.details.get("gate_top_b", {})
         b_count = sum([
             bool(b_details.get("b1_volume_failure", False)),
-            bool(b_details.get("b2_upper_wick_dominance", False)),
+            # B2（上ヒゲ優勢）は record_only のとき数えない（古い詳細には b2_counted が無い＝数える）
+            bool(b_details.get("b2_upper_wick_dominance", False) and b_details.get("b2_counted", True)),
             bool(b_details.get("b3_gap_up_failure", False)),
             # B4（VI逆行）は active のときだけ数える（record_only では記録のみ）
             bool(b_details.get("b4_vi_divergence", False) and b_details.get("b4_counted", False)),

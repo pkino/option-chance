@@ -19,9 +19,21 @@ VI_PRICE_MODES = ("close", "open", "median4")
 
 # B1 で使う指標（config の gate_top.supply_demand.volume_failure.proxy）
 VOLUME_FAILURE_PROXIES = ("volume", "range", "auto")
-# B4 VI逆行の扱い（config の gate_top.supply_demand.vi_divergence.mode）
+# B2 上ヒゲ優勢・B4 VI逆行の扱い（config の upper_wick.mode / vi_divergence.mode）
 #   off = 判定しない / record_only = 記録のみ（Bの成立に数えない）/ active = Bの条件として数える
-VI_DIVERGENCE_MODES = ("off", "record_only", "active")
+CONDITION_MODES = ("off", "record_only", "active")
+VI_DIVERGENCE_MODES = CONDITION_MODES  # 互換用
+
+
+def condition_mode(config: Dict[str, Any], key: str, default: str) -> str:
+    """B条件の mode を読んで検証する。"""
+    mode = str(config.get("mode", default)).lower()
+    if mode not in CONDITION_MODES:
+        raise ValueError(
+            f"gate_top.supply_demand.{key}.mode は "
+            f"{', '.join(CONDITION_MODES)} のいずれかを指定してください: {mode!r}"
+        )
+    return mode
 DEFAULT_VI_PRICE = "close"
 _VI_OHLC_COLUMNS = ["vi", "vi_open", "vi_high", "vi_low"]
 
@@ -577,8 +589,10 @@ class SignalDetector:
 
         # B2: 上ヒゲ優勢
         b2_result, b2_values = self._check_upper_wick_dominance(idx)
+        b2_counted = b2_values.get("mode", "active") == "active"
         signals["b2_upper_wick_dominance"] = b2_result
         signals["b2_values"] = b2_values
+        signals["b2_counted"] = b2_counted
 
         # B3: ギャップアップ失速
         b3_result, b3_values = self._check_gap_up_failure(idx)
@@ -593,7 +607,7 @@ class SignalDetector:
         signals["b4_counted"] = b4_counted
 
         # 1つ以上の条件が成立
-        true_count = sum([b1_result, b2_result, b3_result, b4_result and b4_counted])
+        true_count = sum([b1_result, b2_result and b2_counted, b3_result, b4_result and b4_counted])
         is_satisfied = true_count >= config["required_conditions"]
 
         return is_satisfied, signals
@@ -660,12 +674,7 @@ class SignalDetector:
         VIは Gate① と同じ判定値（vi_gate）を使い、終値の引け際ノイズを避ける。
         """
         config = self.config["gate_top"]["supply_demand"].get("vi_divergence") or {}
-        mode = str(config.get("mode", "off")).lower()
-        if mode not in VI_DIVERGENCE_MODES:
-            raise ValueError(
-                "gate_top.supply_demand.vi_divergence.mode は "
-                f"{', '.join(VI_DIVERGENCE_MODES)} のいずれかを指定してください: {mode!r}"
-            )
+        mode = condition_mode(config, "vi_divergence", "off")
         if mode == "off":
             return False, {"mode": mode}
 
@@ -697,15 +706,22 @@ class SignalDetector:
         return bool(near_high and vi_rise >= rise_threshold), values
 
     def _check_upper_wick_dominance(self, idx: int) -> tuple[bool, dict]:
-        """B2: 上ヒゲ優勢"""
+        """B2: 上ヒゲ優勢
+
+        mode（config の upper_wick.mode。既定 active）が record_only なら、
+        成立は記録するが Gate②B の成立には数えない（detect_gate_top_b が b2_counted で判断）。
+        """
         config = self.config["gate_top"]["supply_demand"]["upper_wick"]
+        mode = condition_mode(config, "upper_wick", "active")
+        if mode == "off":
+            return False, {"mode": mode}
         lookback = config["lookback_days"]
         required_days = config["required_days"]
         wick_ratio = config["wick_ratio"]
         close_from_high = config["close_from_high"]
 
         if idx < lookback:
-            return False, {}
+            return False, {"mode": mode}
 
         # 直近3日分を取得
         recent_df = self.df.iloc[idx - lookback + 1 : idx + 1]
@@ -722,6 +738,7 @@ class SignalDetector:
                 condition_met_days += 1
 
         values = {
+            "mode": mode,
             "upper_wick_days_count": condition_met_days,
             "upper_wick_ratios": upper_wick_ratios,
         }
