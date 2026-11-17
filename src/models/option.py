@@ -96,8 +96,12 @@ class MarketData:
     close: float
     volume: Optional[int] = None
 
-    # VI（Volatility Index）
+    # VI（Volatility Index）。vi は終値。始値・高値・安値は日経公式CSVから取れた場合のみ入る
+    # （20日ボラへのフォールバック時は None）。Gate① の判定値（中央値など）の算出に使う。
     vi: Optional[float] = None
+    vi_open: Optional[float] = None
+    vi_high: Optional[float] = None
+    vi_low: Optional[float] = None
 
     def __post_init__(self):
         """日付の正規化"""
@@ -148,6 +152,8 @@ class Signal:
             bool(b_details.get("b1_volume_failure", False)),
             bool(b_details.get("b2_upper_wick_dominance", False)),
             bool(b_details.get("b3_gap_up_failure", False)),
+            # B4（VI逆行）は active のときだけ数える（record_only では記録のみ）
+            bool(b_details.get("b4_vi_divergence", False) and b_details.get("b4_counted", False)),
         ])
         return self.gate_vi and b_count >= 2 and self.trigger
 
@@ -155,6 +161,21 @@ class Signal:
     def is_strong_signal(self) -> bool:
         """強いシグナルか（C_TRUEも含む）"""
         return self.is_entry_signal and self.gate_top_c
+
+    @property
+    def is_event_probe_signal(self) -> bool:
+        """イベント前打診（Gate① AND 1〜N暦日先に major イベント。Gate②・Trigger③は不要）
+
+        天井を作らずに起きるイベント起因の急落（例: 2026-11 米中間選挙後の -6%）は
+        Gate② では捉えられない。VIが落ち着いている（＝プットが割高でない）うちに、
+        日程の決まっている大型イベントの前に少額で仕込む。
+        同じイベントでは窓内の最初の1日だけ発火し、クールダウン中は抑制される
+        （判定は GateChecker.check_all_gates が details["event_probe"] に書き込む）。
+        通常のエントリー・需給主導・打診が同じ日に出ている場合はそちらを優先する。
+        """
+        if not self.details.get("event_probe", {}).get("fires", False):
+            return False
+        return not (self.is_entry_signal or self.is_supply_dominant_entry or self.is_probe_signal)
 
 
 @dataclass

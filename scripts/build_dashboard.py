@@ -23,6 +23,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from src.history.store import DEFAULT_HISTORY_PATH, load_records
+from src.signals.events import STALE_CALENDAR_DAYS
 
 DEFAULT_OUTPUT_PATH = project_root / "docs" / "index.html"
 
@@ -72,6 +73,7 @@ SIGNAL_ROWS = [
     ("flags", "is_entry_signal", "エントリー成立"),
     ("flags", "is_supply_dominant_entry", "需給主導エントリー"),
     ("flags", "is_probe_signal", "打診シグナル"),
+    ("flags", "is_event_probe_signal", "イベント前打診"),
 ]
 CONDITION_ROWS = [
     ("flags", "gate_vi", "Gate① VI安定"),
@@ -81,9 +83,10 @@ CONDITION_ROWS = [
     ("sub", "a3", "A3 ダイバージェンス"),
     ("sub", "a4", "A4 伸び切り"),
     ("flags", "gate_top_b", "Gate②B 需給"),
-    ("sub", "b1", "B1 出来高失速"),
+    ("sub", "b1", "B1 高値圏の失速（出来高/値幅）"),
     ("sub", "b2", "B2 上ヒゲ優勢"),
     ("sub", "b3", "B3 寄り天"),
+    ("sub", "b4", "B4 VI逆行"),
     ("flags", "gate_top_c", "Gate②C マクロ"),
     ("flags", "trigger", "Trigger③"),
     ("sub", "prev_low_break", "③a 前日安値割れ"),
@@ -94,12 +97,14 @@ TABLE_METRICS = [
     ("close", "終値", ".0f"),
     ("rsi", "RSI", ".1f"),
     ("macd_hist", "MACDヒスト", ".1f"),
-    ("vi", "VI", ".2f"),
+    ("vi", "VI終値", ".2f"),
+    ("vi_gate", "VI判定値", ".2f"),
     ("vi_ma_10", "VI MA10", ".2f"),
     ("vi_pct_1y", "VI 1年順位%", ".0f"),
     ("vi_cv_10", "VI CV10", ".3f"),
     ("vi_slope_10", "VI Slope10", ".3f"),
-    ("volume_ratio", "出来高比", ".2f"),
+    ("range_ratio", "値幅比", ".2f"),
+    ("vi_rise", "VI上昇率", ".2f"),
     ("upper_wick_ratio", "上ヒゲ比", ".2f"),
 ]
 
@@ -242,6 +247,13 @@ def describe_verdict(record: Dict[str, Any]) -> Tuple[str, str, str]:
         return "需給主導エントリー", "critical", "需給条件2つ以上とTrigger③が成立"
     if flags.get("is_probe_signal"):
         return "打診シグナル", "warning", "Gate①②は成立、Trigger③は未発火"
+    if flags.get("is_event_probe_signal"):
+        probe = record.get("event_probe", {})
+        note = (
+            f"{probe.get('event_name', 'イベント')} {probe.get('event_date', '')} の"
+            f"{probe.get('days_until_event', '?')}日前。Gate①成立"
+        )
+        return "イベント前打診", "warning", note
     return "待機中", "muted", "エントリー条件は未成立"
 
 
@@ -258,7 +270,10 @@ def build_condition_heatmap(records: List[Dict[str, Any]]) -> go.Figure:
     dates = [r["date"] for r in records]
 
     z, labels, text = [], [], []
+    b4_mode = _threshold_text(records, "gate_top", "supply_demand", "vi_divergence", "mode")
     for section, key, label in SIGNAL_ROWS + CONDITION_ROWS:
+        if key == "b4" and b4_mode == "record_only":
+            label = f"{label}（記録のみ）"
         on_value = 2 if (section, key, label) in SIGNAL_ROWS else 1
         values = [on_value if r.get(section, {}).get(key) else 0 for r in records]
         z.append(values)
@@ -314,14 +329,30 @@ def _finalize_time_axis(fig: go.Figure, dates: List[str]) -> go.Figure:
     return fig
 
 
+def _vi_gate_series(records: List[Dict[str, Any]]) -> List[Optional[float]]:
+    """Gate① の判定に使われたVI。判定値を記録する前の古い判定は終値で判定していたので終値を使う。"""
+    return [
+        _metric(r, "vi_gate") if _metric(r, "vi_gate") is not None else _metric(r, "vi")
+        for r in records
+    ]
+
+
 def build_vi_level_chart(records: List[Dict[str, Any]]) -> go.Figure:
-    """VI と 10日移動平均。単位が同じなので 1 つの軸に載せる。"""
+    """VI判定値と10日移動平均、参考として生の終値。単位が同じなので 1 つの軸に載せる。"""
     dates = [r["date"] for r in records]
     light = THEME["light"]
 
     fig = go.Figure()
+    gate = _vi_gate_series(records)
+    close = _series(records, "vi")
+    if any(g is not None and c is not None and abs(g - c) > 1e-9 for g, c in zip(gate, close)):
+        # 判定値が終値と食い違う日がある場合だけ、生の終値を細い点線で重ねる
+        fig.add_trace(
+            go.Scatter(x=dates, y=close, name="VI終値",
+                       line=dict(color=light["muted"], width=1, dash="dot"))
+        )
     fig.add_trace(
-        go.Scatter(x=dates, y=_series(records, "vi"), name="VI",
+        go.Scatter(x=dates, y=gate, name="VI判定値",
                    line=dict(color=light["series_1"], width=2))
     )
     fig.add_trace(
@@ -445,6 +476,7 @@ def build_price_chart(records: List[Dict[str, Any]]) -> go.Figure:
     for flag, label, color, symbol in (
         ("is_entry_signal", "エントリー", STATUS["critical"], "triangle-down"),
         ("is_probe_signal", "打診", STATUS["warning"], "circle"),
+        ("is_event_probe_signal", "イベント前打診", STATUS["warning"], "diamond"),
     ):
         marked = [r for r in records if r.get("flags", {}).get(flag)]
         if not marked:
@@ -492,6 +524,22 @@ def _fmt(value: Optional[float], spec: str) -> str:
     return format(value, spec) if value is not None else "—"
 
 
+def data_warnings(record: Dict[str, Any]) -> List[str]:
+    """最新レコードから、判定の前提が崩れていることを示す注意書きを集める。"""
+    warnings = []
+    last = record.get("event_calendar_last")
+    if last:
+        remaining = (datetime.strptime(last, "%Y-%m-%d").date()
+                     - datetime.strptime(record["date"], "%Y-%m-%d").date()).days
+        if remaining < STALE_CALENDAR_DAYS:
+            warnings.append(f"イベントカレンダーが {last} までしか登録されていません。config の events を更新してください")
+    quality = record.get("data_quality", {})
+    vi_price = record.get("thresholds", {}).get("gate_vi", {}).get("vi_price", "close")
+    if vi_price != "close" and quality.get("vi_ohlc_available") is False:
+        warnings.append("VIの四本値が取れず、Gate①は終値で判定されています")
+    return warnings
+
+
 def build_hero(records: List[Dict[str, Any]]) -> str:
     """最新の判定状況。グラフを読む前に「今どうなっているか」を一目で示す。"""
     latest = records[-1]
@@ -513,7 +561,7 @@ def build_hero(records: List[Dict[str, Any]]) -> str:
         for name, note_, ok in gates
     )
 
-    vi = _metric(latest, "vi")
+    vi = _vi_gate_series([latest])[0]
     vi_threshold = _threshold_value(records, "gate_vi", "vi_threshold")
     vi_pct = _metric(latest, "vi_pct_1y")
     pct_threshold = _threshold_value(records, "gate_vi", "vi_percentile_threshold")
@@ -533,12 +581,13 @@ def build_hero(records: List[Dict[str, Any]]) -> str:
 
     entry_days = sum(1 for r in records if r.get("flags", {}).get("is_entry_signal"))
     probe_days = sum(1 for r in records if r.get("flags", {}).get("is_probe_signal"))
+    event_days = sum(1 for r in records if r.get("flags", {}).get("is_event_probe_signal"))
 
     tiles = [
-        ("VI", _fmt(vi, ".2f"), vi_note),
+        ("VI判定値", _fmt(vi, ".2f"), vi_note),
         ("RSI", _fmt(rsi, ".1f"), rsi_note),
         ("終値", _fmt(_metric(latest, "close"), ",.0f"), f"MA5 {_fmt(_metric(latest, 'ma_5'), ',.0f')}"),
-        ("期間内のシグナル", f"{entry_days} / {probe_days}", "エントリー / 打診"),
+        ("期間内のシグナル", f"{entry_days} / {probe_days} / {event_days}", "エントリー / 打診 / イベント前"),
     ]
     tile_html = "".join(
         f'<div class="tile"><div class="tile-label">{lbl}</div>'
@@ -547,6 +596,8 @@ def build_hero(records: List[Dict[str, Any]]) -> str:
         for lbl, val, note_ in tiles
     )
 
+    warnings_html = "".join(f'<p class="hero-warning">⚠️ {w}</p>' for w in data_warnings(latest))
+
     return f"""
     <section class="hero">
       <div class="hero-verdict">
@@ -554,6 +605,7 @@ def build_hero(records: List[Dict[str, Any]]) -> str:
         <div class="hero-status status-{status}"><span class="dot"></span>{label}</div>
         <p class="hero-note">{note}</p>
         <div class="chips">{chips}</div>
+        {warnings_html}
       </div>
       <div class="tiles">{tile_html}</div>
     </section>"""
@@ -622,7 +674,7 @@ def render_html(records: List[Dict[str, Any]], days: int) -> str:
             (build_condition_heatmap(records), "chart-heatmap", True,
              "判定条件の成立状況", "赤＝シグナル発火／青＝条件成立", True),
             (build_vi_level_chart(records), "chart-vi", False,
-             "Gate① VI水準", "VIと10日移動平均", False),
+             "Gate① VI水準", "判定値（四本値中央値など）と10日移動平均。点線は生の終値", False),
             (build_vi_stability_chart(records), "chart-vi-stability", False,
              "Gate① VIの安定度", "相対水準・ばらつき・傾き", False),
             (build_rsi_chart(records), "chart-rsi", False,
@@ -800,6 +852,7 @@ def _stylesheet() -> str:
     font-size: 1.55rem; font-weight: 700; margin: 2px 0 4px; line-height: 1.25;
   }}
   .hero-status .dot {{ width: 11px; height: 11px; border-radius: 50%; flex: none; }}
+  .hero-warning {{ margin: 10px 0 0; color: var(--ink-2); font-size: .85rem; }}
   .status-critical {{ color: var(--critical); }}
   .status-critical .dot {{ background: var(--critical); }}
   .status-warning .dot {{ background: var(--warning); }}
@@ -894,7 +947,8 @@ const palette = () => THEME[q.matches ? 'dark' : 'light'];
 
 // 系列名 → テーマ別の色。凡例名でひけるようにしておく。
 const SERIES_KEY = {
-  'VI': 'series_1', 'VI MA10': 'series_2', 'VI STD10': 'series_1',
+  'VI': 'series_1', 'VI判定値': 'series_1', 'VI終値': 'muted',
+  'VI MA10': 'series_2', 'VI STD10': 'series_1',
   'VI Slope10': 'series_1', 'RSI': 'series_1', '終値': 'series_1',
   'MA5': 'series_2', 'BB上限（参考）': 'muted',
 };

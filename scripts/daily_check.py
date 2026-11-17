@@ -13,10 +13,16 @@ import yaml
 from src.models.option import OptionData, MarketData
 from src.data_sources.jpx import JPXDataFetcher
 from src.data_sources.market_data import MarketDataFetcher
-from src.signals.gate import GateChecker, format_signal_for_notification
+from src.signals.gate import (
+    SIGNAL_KIND_LABELS,
+    GateChecker,
+    classify_signal,
+    format_signal_for_notification,
+)
 from src.signals.selection import DELTA_MODE, select_candidates, selection_mode
 from src.notifiers.slack import SlackNotifier
 from src.history.store import DEFAULT_HISTORY_PATH, append_record, build_record
+from src.signals.events import calendar_staleness, load_events
 
 # 取得期間。Gate① hybrid の「VIの1年順位」に252営業日分のVIが要るため、暦日で1年強を取る
 DEFAULT_LOOKBACK_DAYS = 420
@@ -71,11 +77,12 @@ class DailyEntryChecker:
             send_no_signal: シグナルがない場合もSlackに送信するか
 
         Returns:
-            エントリーシグナルが検出されたか
+            通知対象のシグナル（エントリー・需給主導・打診・イベント前打診）が検出されたか
         """
         print("=" * 70)
         print("日次エントリーチェック開始")
         print("=" * 70)
+        self._warn_if_calendar_stale()
 
         try:
             # 1. 市場データを取得
@@ -98,6 +105,7 @@ class DailyEntryChecker:
                 latest_signal = signals[-1]
                 print(f"  最新シグナル日付: {latest_signal.date}")
                 self._warn_if_percentile_unavailable(latest_signal)
+                self._warn_data_quality(latest_signal)
             else:
                 print("  シグナルなし")
                 if self.slack_notifier and send_no_signal:
@@ -109,8 +117,9 @@ class DailyEntryChecker:
 
             # 3. エントリーシグナルをチェック
             print("\n[3/4] エントリーシグナルチェック中...")
-            if latest_signal.is_entry_signal:
-                print("  ✅ エントリーシグナル検出！")
+            kind = classify_signal(latest_signal)
+            if kind is not None:
+                print(f"  ✅ {SIGNAL_KIND_LABELS[kind]}検出！")
 
                 # 4. オプション候補を取得
                 print("\n[4/4] オプション候補を取得中...")
@@ -119,19 +128,20 @@ class DailyEntryChecker:
                 # 結果を表示
                 self._display_results(latest_signal, option_candidates)
 
-                # Slack通知
+                # Slack通知（エントリーだけでなく、需給主導・打診・イベント前打診も通知する）
                 if self.slack_notifier:
-                    self._send_slack_notification(latest_signal, option_candidates)
+                    self._send_slack_notification(kind, latest_signal, option_candidates)
 
                 return True
             else:
-                print("  ⚠️ エントリーシグナルなし")
+                print("  ⚠️ 通知対象のシグナルなし")
                 print(f"    - Gate① (VI): {latest_signal.gate_vi}")
                 print(f"    - Gate② (A): {latest_signal.gate_top_a}")
                 print(f"    - Gate② (B): {latest_signal.gate_top_b}")
                 print(f"    - Trigger③: {latest_signal.trigger}")
                 print(f"    - 打診シグナル: {latest_signal.is_probe_signal}")
                 print(f"    - 需給主導シグナル: {latest_signal.is_supply_dominant_entry}")
+                print(f"    - イベント前打診: {latest_signal.is_event_probe_signal}")
                 print(
                     f"    - クールダウン抑制: "
                     f"{latest_signal.details.get('cooldown_suppressed', False)}"
@@ -183,6 +193,27 @@ class DailyEntryChecker:
             f"Gate①は絶対水準のみで判定されます。--lookback-days を {window} 営業日"
             "以上が入る値に増やしてください。"
         )
+
+    def _warn_if_calendar_stale(self) -> None:
+        """イベントカレンダーの登録が尽きかけていたら警告する（2025年のまま放置された反省）。"""
+        message = calendar_staleness(load_events(self.config.get("events")), date.today())
+        if message:
+            print(f"  ⚠️ {message}")
+
+    def _warn_data_quality(self, signal) -> None:
+        """判定に使うデータが欠けて、代替指標や終値で判定されている場合に知らせる。"""
+        quality = signal.details.get("data_quality", {})
+        vi_price = self.config.get("gate_vi", {}).get("vi_price", "close")
+        if vi_price != "close" and not quality.get("vi_ohlc_available", True):
+            print(
+                f"  ⚠️ VIの四本値が取れませんでした（日経公式CSVの取得失敗など）。"
+                f"Gate①は {vi_price} ではなく終値で判定されています。"
+            )
+        b1 = signal.details.get("gate_top_b", {}).get("b1_values", {})
+        if b1 and not b1.get("available", True):
+            print("  ⚠️ B1（高値圏の失速）は判定に必要なデータが無く、判定不能です。")
+        elif b1.get("proxy_used") == "range" and b1.get("proxy") == "auto":
+            print("  ℹ️ 出来高データが無いため、B1は値幅（ATR5/ATR20）で判定しています。")
 
     def _fetch_market_data(self, lookback_days: int) -> List[MarketData]:
         """市場データを取得"""
@@ -246,11 +277,11 @@ class DailyEntryChecker:
                     f"Delta={delta_str} | IV={iv_str} | DTE={opt['dte']}日 | Expiry={opt['expiry']}"
                 )
 
-    def _send_slack_notification(self, signal, option_candidates: List[dict]):
+    def _send_slack_notification(self, kind: str, signal, option_candidates: List[dict]):
         """Slack通知を送信"""
         try:
             signal_text = format_signal_for_notification(signal)
-            self.slack_notifier.send_entry_signal(signal_text, option_candidates)
+            self.slack_notifier.send_signal(kind, signal_text, option_candidates)
         except Exception as e:
             print(f"  ⚠️ Slack通知エラー: {e}")
 

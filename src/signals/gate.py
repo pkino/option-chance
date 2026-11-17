@@ -5,8 +5,10 @@ import numpy as np
 import pandas as pd
 
 from ..models.option import Signal, MarketData
+from .events import Event, load_events, upcoming_events
 from ..indicators.technical import (
     DEFAULT_VI_PERCENTILE_WINDOW,
+    DEFAULT_VI_PRICE,
     SignalDetector,
     TechnicalIndicators,
 )
@@ -31,12 +33,19 @@ _TECHNICAL_VALUE_COLUMNS = [
     "ma_20",
     "ma_25",
     "vi",
+    "vi_open",
+    "vi_high",
+    "vi_low",
+    "vi_gate",
     "vi_ma_10",
     "vi_std_10",
     "vi_slope_10",
     "vi_cv_10",
     "vi_pct_1y",
     "volume_ratio",
+    "range_ratio",
+    "atr_5",
+    "atr_20",
     "upper_wick_ratio",
     "lower_wick_ratio",
     "body_ratio",
@@ -74,6 +83,19 @@ def _collect_technical_values(df: pd.DataFrame, idx: int) -> Dict[str, Any]:
     return values
 
 
+def _collect_data_quality(df: pd.DataFrame, idx: int) -> Dict[str, bool]:
+    """判定に使えたデータの有無。欠けていると一部の条件が代替指標や終値で判定される。"""
+    row = df.iloc[idx]
+
+    def _present(col: str) -> bool:
+        return col in df.columns and not pd.isna(row.get(col))
+
+    return {
+        "volume_available": _present("volume_ratio"),
+        "vi_ohlc_available": _present("vi_open") and _present("vi_high") and _present("vi_low"),
+    }
+
+
 class GateChecker:
     """Gate条件の統合チェッカー"""
 
@@ -99,13 +121,16 @@ class GateChecker:
         """
         if events is None:
             events = self.config.get("events", [])
+        events = load_events(events)
 
         # テクニカル指標を計算
+        gate_vi_config = self.config.get("gate_vi", {})
         df = TechnicalIndicators.calculate_all(
             market_data,
-            vi_percentile_window=self.config.get("gate_vi", {}).get(
+            vi_percentile_window=gate_vi_config.get(
                 "vi_percentile_window", DEFAULT_VI_PERCENTILE_WINDOW
             ),
+            vi_price=gate_vi_config.get("vi_price", DEFAULT_VI_PRICE),
         )
 
         # SignalDetectorを初期化
@@ -115,6 +140,13 @@ class GateChecker:
         cooldown_days = self.config.get("risk_management", {}).get("entry_cooldown_days", 0)
         last_entry_date = None
 
+        # イベント前打診の設定
+        event_probe_config = self.config.get("event_probe") or {}
+        event_probe_enabled = bool(event_probe_config.get("enabled", False))
+        lookahead_days = int(event_probe_config.get("lookahead_days", 5))
+        event_tiers = list(event_probe_config.get("tiers", ["major"]))
+        covered_events: set = set()  # 打診済み（または別シグナルでカバー済み）のイベント
+
         # 各日についてシグナルをチェック
         signals = []
         for idx in range(len(df)):
@@ -122,14 +154,23 @@ class GateChecker:
             if signal is None:
                 continue
 
-            # クールダウン中はエントリーシグナルと需給主導シグナルを抑制
-            # （打診シグナルは情報として残す）
+            in_cooldown = False
+            days_since_last = None
             if cooldown_days > 0 and last_entry_date is not None:
                 days_since_last = (signal.date - last_entry_date).days
-                if days_since_last < cooldown_days:
-                    if signal.is_entry_signal or signal.is_supply_dominant_entry:
-                        signal.details["cooldown_suppressed"] = True
-                        signal.details["days_since_last_entry"] = days_since_last
+                in_cooldown = days_since_last < cooldown_days
+
+            # クールダウン中はエントリーシグナルと需給主導シグナルを抑制
+            # （打診シグナルは情報として残す）
+            if in_cooldown and (signal.is_entry_signal or signal.is_supply_dominant_entry):
+                signal.details["cooldown_suppressed"] = True
+                signal.details["days_since_last_entry"] = days_since_last
+
+            if event_probe_enabled:
+                self._apply_event_probe(
+                    signal, events, lookahead_days, event_tiers, covered_events,
+                    in_cooldown, days_since_last,
+                )
 
             signals.append(signal)
 
@@ -139,6 +180,66 @@ class GateChecker:
                     last_entry_date = signal.date
 
         return signals
+
+    @staticmethod
+    def _apply_event_probe(
+        signal: Signal,
+        events: List[Event],
+        lookahead_days: int,
+        tiers: List[str],
+        covered_events: set,
+        in_cooldown: bool,
+        days_since_last: Optional[int],
+    ) -> None:
+        """イベント前打診の成否を signal.details["event_probe"] に書き込む。
+
+        Gate① が実データで成立している日に、1〜lookahead_days 暦日先に未カバーの
+        対象イベントがあれば発火する。発火（または同日に別の発注シグナル）で
+        そのイベントと、そこから lookahead_days 以内に続くイベントはカバー済みになり、
+        以後の日では発火しない。
+        """
+        vi_details = signal.details.get("gate_vi", {})
+        # VIが欠損して Gate① がスキップ扱い（True）になった日では発火させない
+        if not (signal.gate_vi and vi_details.get("vi") is not None):
+            return
+
+        pending = [
+            (event, days)
+            for event, days in upcoming_events(events, signal.date, 1, lookahead_days, tiers)
+            if event not in covered_events
+        ]
+        if not pending:
+            return
+
+        event, days = pending[0]
+        # 発火したら、直後に続くイベント（例: FOMC の2日後の日銀会合）も同じポジションで
+        # カバーしたとみなす。対象は「最初のイベントから lookahead_days 暦日以内」の未カバー分
+        cluster = [
+            e for e in events
+            if e.tier in tiers and e not in covered_events
+            and 0 <= (e.date - event.date).days <= lookahead_days
+        ]
+        info: Dict[str, Any] = {
+            "fires": not in_cooldown,
+            "event_date": event.date.isoformat(),
+            "event_name": event.name,
+            "event_tier": event.tier,
+            "days_until_event": days,
+            "events_in_window": [f"{e.name} {e.date.isoformat()}" for e, _ in pending],
+            "covers": [f"{e.name} {e.date.isoformat()}" for e in cluster],
+        }
+        if in_cooldown:
+            info["cooldown_suppressed"] = True
+            info["days_since_last_entry"] = days_since_last
+        signal.details["event_probe"] = info
+
+        other_actionable = (
+            (signal.is_entry_signal or signal.is_supply_dominant_entry)
+            and not signal.details.get("cooldown_suppressed")
+        ) or signal.is_probe_signal
+        if info["fires"] or other_actionable:
+            covered_events.update(e for e, _ in pending)
+            covered_events.update(cluster)
 
     def _check_single_date(
         self, df: pd.DataFrame, idx: int, detector: SignalDetector, events: List[str]
@@ -185,7 +286,12 @@ class GateChecker:
             "gate_top_c": {"satisfied": gate_top_c, **details_c},
             "trigger": {"satisfied": trigger, **details_trigger},
             "technical_values": _collect_technical_values(df, idx),
+            "data_quality": _collect_data_quality(df, idx),
         }
+        # B4 の上昇率（VIの直近安値比）は設定の lookback に依存するので判定結果から取る
+        details["technical_values"]["vi_rise"] = _to_plain(
+            details_b.get("b4_values", {}).get("vi_rise")
+        )
 
         signal = Signal(
             date=signal_date,
@@ -244,6 +350,10 @@ class GateChecker:
         """
         return [s for s in signals if s.is_supply_dominant_entry]
 
+    def get_event_probe_signals(self, signals: List[Signal]) -> List[Signal]:
+        """イベント前打診シグナルを抽出（Gate①成立 AND 直前に major イベント）"""
+        return [s for s in signals if s.is_event_probe_signal]
+
     def get_strong_signals(self, signals: List[Signal]) -> List[Signal]:
         """
         強いシグナル（C_TRUEも含む）のみを抽出
@@ -257,6 +367,34 @@ class GateChecker:
         return [s for s in signals if s.is_strong_signal]
 
 
+# 通知する種類（優先度の高い順）
+SIGNAL_KINDS = ("entry", "supply", "probe", "event_probe")
+SIGNAL_KIND_LABELS = {
+    "entry": "エントリーシグナル",
+    "supply": "需給主導エントリー",
+    "probe": "打診シグナル",
+    "event_probe": "イベント前打診",
+}
+
+
+def classify_signal(signal: Signal) -> Optional[str]:
+    """その日に通知すべきシグナルの種類を返す（なければ None）。
+
+    1日に複数成立しうるので、優先度 entry > supply > probe > event_probe で1つに絞る。
+    クールダウンで抑制されたエントリー・需給主導は通知しない。
+    """
+    suppressed = signal.details.get("cooldown_suppressed", False)
+    if signal.is_entry_signal and not suppressed:
+        return "entry"
+    if signal.is_supply_dominant_entry and not suppressed:
+        return "supply"
+    if signal.is_probe_signal:
+        return "probe"
+    if signal.is_event_probe_signal:
+        return "event_probe"
+    return None
+
+
 def _fmt(val, spec: str) -> str:
     """数値なら format(val, spec)、欠損は N/A、それ以外は str(val) を返す。"""
     if val is None:
@@ -264,6 +402,23 @@ def _fmt(val, spec: str) -> str:
     if isinstance(val, (int, float)):
         return format(val, spec)
     return str(val)
+
+
+_B1_PROXY_LABELS = {"volume": "出来高", "range": "値幅"}
+
+_VI_PRICE_LABELS = {"close": "終値", "open": "始値", "median4": "四本値中央値"}
+
+
+def _vi_label(gate_vi_details: Dict[str, Any]) -> str:
+    """「VI判定値=30.60（四本値中央値／終値 25.00）」形式。終値判定なら従来どおり VI=…。"""
+    vi = gate_vi_details.get("vi")
+    vi_price = gate_vi_details.get("vi_price", DEFAULT_VI_PRICE)
+    if vi_price == "close":
+        return f"VI={_fmt(vi, '.2f')}"
+    label = _VI_PRICE_LABELS.get(vi_price, vi_price)
+    return (
+        f"VI判定値={_fmt(vi, '.2f')}（{label}／終値 {_fmt(gate_vi_details.get('vi_close'), '.2f')}）"
+    )
 
 
 def format_signal_for_notification(signal: Signal) -> str:
@@ -276,9 +431,22 @@ def format_signal_for_notification(signal: Signal) -> str:
     Returns:
         フォーマットされた文字列
     """
+    kind = classify_signal(signal)
     lines = []
-    lines.append(f"📊 **エントリーシグナル検出** ({signal.date})")
+    lines.append(f"📊 **{SIGNAL_KIND_LABELS.get(kind, '判定結果')}** ({signal.date})")
     lines.append("")
+
+    event_probe = signal.details.get("event_probe", {})
+    if event_probe:
+        state = "成立" if event_probe.get("fires") else "クールダウンで抑制"
+        lines.append(
+            f"🗓️ **イベント前打診（{state}）**: {event_probe.get('event_name')} "
+            f"{event_probe.get('event_date')} まで{event_probe.get('days_until_event')}日"
+        )
+        follows = (event_probe.get("covers") or [])[1:]
+        if follows:
+            lines.append(f"     続くイベントも対象: {', '.join(follows)}")
+        lines.append("")
 
     # Gate状態
     lines.append("**Gate状態:**")
@@ -288,15 +456,16 @@ def format_signal_for_notification(signal: Signal) -> str:
     vi_status = '✓' if signal.gate_vi else '✗'
     lines.append(f"  ✅ Gate① VI安定: {vi_status}")
     if gate_vi_details and gate_vi_details.get("vi") is not None:
+        vi_label = _vi_label(gate_vi_details)
         if gate_vi_details.get("mode") == "hybrid":
             pct = gate_vi_details.get("vi_pct_1y")
             rank = f"1年順位 {pct:.0f}%" if pct is not None else "1年順位 —（履歴不足）"
-            lines.append(f"     VI={gate_vi_details.get('vi'):.2f}（{rank}）, "
+            lines.append(f"     {vi_label}（{rank}）, "
                         f"MA10={_fmt(gate_vi_details.get('vi_ma_10'), '.2f')}, "
                         f"CV10={_fmt(gate_vi_details.get('vi_cv_10'), '.3f')}, "
                         f"Slope10={_fmt(gate_vi_details.get('vi_slope_10'), '.3f')}")
         else:
-            lines.append(f"     VI={gate_vi_details.get('vi'):.2f}, "
+            lines.append(f"     {vi_label}, "
                         f"MA10={_fmt(gate_vi_details.get('vi_ma_10'), '.2f')}, "
                         f"STD10={_fmt(gate_vi_details.get('vi_std_10'), '.2f')}, "
                         f"Slope10={_fmt(gate_vi_details.get('vi_slope_10'), '.3f')}")
@@ -328,10 +497,15 @@ def format_signal_for_notification(signal: Signal) -> str:
     # Gate② 需給 (B)
     lines.append(f"  ✅ Gate② 需給 (B): {'✓' if signal.gate_top_b else '✗'}")
     details_b = signal.details.get("gate_top_b", {})
-    if details_b.get("b1_volume_failure"):
-        b1_vals = details_b.get("b1_values", {})
-        lines.append(f"     B1(出来高不全): Volume比={_fmt(b1_vals.get('volume_ratio', 'N/A'), '.2f')}, "
-                    f"高値距離%={_fmt(b1_vals.get('distance_from_high_20_pct', 'N/A'), '.2f')}")
+    b1_vals = details_b.get("b1_values", {})
+    if b1_vals:
+        b1_mark = "✓" if details_b.get("b1_volume_failure") else "✗"
+        if not b1_vals.get("available", True):
+            lines.append(f"     B1(高値圏の失速): 判定不能（{_B1_PROXY_LABELS.get(b1_vals.get('proxy_used'), '')}データなし）")
+        else:
+            lines.append(f"     B1(高値圏の失速・{_B1_PROXY_LABELS.get(b1_vals.get('proxy_used'), '出来高')}): {b1_mark} "
+                        f"5日/20日比={_fmt(b1_vals.get('ratio'), '.2f')}, "
+                        f"高値距離%={_fmt(b1_vals.get('distance_from_high_20_pct'), '.2f')}")
     if details_b.get("b2_upper_wick_dominance"):
         b2_vals = details_b.get("b2_values", {})
         wick_ratios = b2_vals.get('upper_wick_ratios', [])
@@ -343,13 +517,20 @@ def format_signal_for_notification(signal: Signal) -> str:
         lines.append(f"     B3(寄り天): Open={_fmt(b3_vals.get('open', 'N/A'), '.2f')}, "
                     f"Close={_fmt(b3_vals.get('close', 'N/A'), '.2f')}, "
                     f"前日高値={_fmt(b3_vals.get('prev_high', 'N/A'), '.2f')}, Gap%={_fmt(b3_vals.get('gap_pct', 'N/A'), '.2f')}")
+    if details_b.get("b4_vi_divergence"):
+        b4_vals = details_b.get("b4_values", {})
+        counted = "" if details_b.get("b4_counted") else "・記録のみ"
+        lines.append(f"     B4(VI逆行{counted}): VI={_fmt(b4_vals.get('vi'), '.2f')}, "
+                    f"直近安値={_fmt(b4_vals.get('vi_min'), '.2f')}, "
+                    f"上昇率={_fmt((b4_vals.get('vi_rise') or 0) * 100, '.0f')}%")
 
     # Gate② マクロ (C)
     lines.append(f"  {'✅' if signal.gate_top_c else '  '} Gate② マクロ (C): {'✓ 強い天井示唆' if signal.gate_top_c else '✗'}")
     details_c = signal.details.get("gate_top_c", {})
     if details_c.get("c1_event_proximity"):
         c1_vals = details_c.get("c1_values", {})
-        lines.append(f"     C1(イベント近接): 最接近イベント={c1_vals.get('nearest_event_date', 'N/A')}, "
+        lines.append(f"     C1(イベント近接): 最接近イベント={c1_vals.get('nearest_event_name', '')} "
+                    f"{c1_vals.get('nearest_event_date', 'N/A')}, "
                     f"残日数={c1_vals.get('days_until_event', 'N/A')}")
 
     # Trigger③
@@ -375,11 +556,15 @@ def format_signal_for_notification(signal: Signal) -> str:
                 f"VI={_fmt(tech_vals.get('vi', 'N/A'), '.2f')}")
     lines.append("")
 
-    # シグナル強度
-    if signal.is_strong_signal:
+    # シグナル強度・建て方の目安
+    if kind == "entry" and signal.is_strong_signal:
         lines.append("🔥 **強い天井示唆シグナル** 🔥")
-    else:
+    elif kind in ("entry", "supply"):
         lines.append("⚠️ 通常エントリーシグナル")
+    elif kind == "probe":
+        lines.append("🟡 打診: Trigger③は未発火。サイズは通常の半分を目安に")
+    elif kind == "event_probe":
+        lines.append("🗓️ イベント前打診: 天井条件は不要。サイズは通常の半分を目安に、イベント通過後は早めに見直し")
 
     return "\n".join(lines)
 
