@@ -7,6 +7,7 @@ import pandas as pd
 from ..models.option import Signal, MarketData
 from ..indicators.technical import (
     DEFAULT_VI_PERCENTILE_WINDOW,
+    DEFAULT_VI_PRICE,
     SignalDetector,
     TechnicalIndicators,
 )
@@ -31,6 +32,10 @@ _TECHNICAL_VALUE_COLUMNS = [
     "ma_20",
     "ma_25",
     "vi",
+    "vi_open",
+    "vi_high",
+    "vi_low",
+    "vi_gate",
     "vi_ma_10",
     "vi_std_10",
     "vi_slope_10",
@@ -101,11 +106,13 @@ class GateChecker:
             events = self.config.get("events", [])
 
         # テクニカル指標を計算
+        gate_vi_config = self.config.get("gate_vi", {})
         df = TechnicalIndicators.calculate_all(
             market_data,
-            vi_percentile_window=self.config.get("gate_vi", {}).get(
+            vi_percentile_window=gate_vi_config.get(
                 "vi_percentile_window", DEFAULT_VI_PERCENTILE_WINDOW
             ),
+            vi_price=gate_vi_config.get("vi_price", DEFAULT_VI_PRICE),
         )
 
         # SignalDetectorを初期化
@@ -266,6 +273,21 @@ def _fmt(val, spec: str) -> str:
     return str(val)
 
 
+_VI_PRICE_LABELS = {"close": "終値", "open": "始値", "median4": "四本値中央値"}
+
+
+def _vi_label(gate_vi_details: Dict[str, Any]) -> str:
+    """「VI判定値=30.60（四本値中央値／終値 25.00）」形式。終値判定なら従来どおり VI=…。"""
+    vi = gate_vi_details.get("vi")
+    vi_price = gate_vi_details.get("vi_price", DEFAULT_VI_PRICE)
+    if vi_price == "close":
+        return f"VI={_fmt(vi, '.2f')}"
+    label = _VI_PRICE_LABELS.get(vi_price, vi_price)
+    return (
+        f"VI判定値={_fmt(vi, '.2f')}（{label}／終値 {_fmt(gate_vi_details.get('vi_close'), '.2f')}）"
+    )
+
+
 def format_signal_for_notification(signal: Signal) -> str:
     """
     シグナルを通知用にフォーマット
@@ -288,15 +310,16 @@ def format_signal_for_notification(signal: Signal) -> str:
     vi_status = '✓' if signal.gate_vi else '✗'
     lines.append(f"  ✅ Gate① VI安定: {vi_status}")
     if gate_vi_details and gate_vi_details.get("vi") is not None:
+        vi_label = _vi_label(gate_vi_details)
         if gate_vi_details.get("mode") == "hybrid":
             pct = gate_vi_details.get("vi_pct_1y")
             rank = f"1年順位 {pct:.0f}%" if pct is not None else "1年順位 —（履歴不足）"
-            lines.append(f"     VI={gate_vi_details.get('vi'):.2f}（{rank}）, "
+            lines.append(f"     {vi_label}（{rank}）, "
                         f"MA10={_fmt(gate_vi_details.get('vi_ma_10'), '.2f')}, "
                         f"CV10={_fmt(gate_vi_details.get('vi_cv_10'), '.3f')}, "
                         f"Slope10={_fmt(gate_vi_details.get('vi_slope_10'), '.3f')}")
         else:
-            lines.append(f"     VI={gate_vi_details.get('vi'):.2f}, "
+            lines.append(f"     {vi_label}, "
                         f"MA10={_fmt(gate_vi_details.get('vi_ma_10'), '.2f')}, "
                         f"STD10={_fmt(gate_vi_details.get('vi_std_10'), '.2f')}, "
                         f"Slope10={_fmt(gate_vi_details.get('vi_slope_10'), '.3f')}")

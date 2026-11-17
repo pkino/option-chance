@@ -94,7 +94,8 @@ TABLE_METRICS = [
     ("close", "終値", ".0f"),
     ("rsi", "RSI", ".1f"),
     ("macd_hist", "MACDヒスト", ".1f"),
-    ("vi", "VI", ".2f"),
+    ("vi", "VI終値", ".2f"),
+    ("vi_gate", "VI判定値", ".2f"),
     ("vi_ma_10", "VI MA10", ".2f"),
     ("vi_pct_1y", "VI 1年順位%", ".0f"),
     ("vi_cv_10", "VI CV10", ".3f"),
@@ -314,14 +315,30 @@ def _finalize_time_axis(fig: go.Figure, dates: List[str]) -> go.Figure:
     return fig
 
 
+def _vi_gate_series(records: List[Dict[str, Any]]) -> List[Optional[float]]:
+    """Gate① の判定に使われたVI。判定値を記録する前の古い判定は終値で判定していたので終値を使う。"""
+    return [
+        _metric(r, "vi_gate") if _metric(r, "vi_gate") is not None else _metric(r, "vi")
+        for r in records
+    ]
+
+
 def build_vi_level_chart(records: List[Dict[str, Any]]) -> go.Figure:
-    """VI と 10日移動平均。単位が同じなので 1 つの軸に載せる。"""
+    """VI判定値と10日移動平均、参考として生の終値。単位が同じなので 1 つの軸に載せる。"""
     dates = [r["date"] for r in records]
     light = THEME["light"]
 
     fig = go.Figure()
+    gate = _vi_gate_series(records)
+    close = _series(records, "vi")
+    if any(g is not None and c is not None and abs(g - c) > 1e-9 for g, c in zip(gate, close)):
+        # 判定値が終値と食い違う日がある場合だけ、生の終値を細い点線で重ねる
+        fig.add_trace(
+            go.Scatter(x=dates, y=close, name="VI終値",
+                       line=dict(color=light["muted"], width=1, dash="dot"))
+        )
     fig.add_trace(
-        go.Scatter(x=dates, y=_series(records, "vi"), name="VI",
+        go.Scatter(x=dates, y=gate, name="VI判定値",
                    line=dict(color=light["series_1"], width=2))
     )
     fig.add_trace(
@@ -622,7 +639,7 @@ def render_html(records: List[Dict[str, Any]], days: int) -> str:
             (build_condition_heatmap(records), "chart-heatmap", True,
              "判定条件の成立状況", "赤＝シグナル発火／青＝条件成立", True),
             (build_vi_level_chart(records), "chart-vi", False,
-             "Gate① VI水準", "VIと10日移動平均", False),
+             "Gate① VI水準", "判定値（四本値中央値など）と10日移動平均。点線は生の終値", False),
             (build_vi_stability_chart(records), "chart-vi-stability", False,
              "Gate① VIの安定度", "相対水準・ばらつき・傾き", False),
             (build_rsi_chart(records), "chart-rsi", False,
@@ -894,7 +911,8 @@ const palette = () => THEME[q.matches ? 'dark' : 'light'];
 
 // 系列名 → テーマ別の色。凡例名でひけるようにしておく。
 const SERIES_KEY = {
-  'VI': 'series_1', 'VI MA10': 'series_2', 'VI STD10': 'series_1',
+  'VI': 'series_1', 'VI判定値': 'series_1', 'VI終値': 'muted',
+  'VI MA10': 'series_2', 'VI STD10': 'series_1',
   'VI Slope10': 'series_1', 'RSI': 'series_1', '終値': 'series_1',
   'MA5': 'series_2', 'BB上限（参考）': 'muted',
 };

@@ -41,6 +41,12 @@ option_selection:
 gate_vi:
   mode: hybrid
 
+  # 判定に使うVIの値: close（終値）| open（始値）| median4（四本値の中央値）
+  # 2026年以降、日経VIの終値が引け際に当日安値まで急落する日が頻発し（2025年 11/243日 → 2026年 94/212日）、
+  # 終値ベースのCV・1年順位がノイズで崩れていた。中央値は1日の中で極端な1点に引きずられない。
+  # 四本値が取れない日（20日ボラへのフォールバック時）は終値で代用する。詳細は docs/gate_vi_validation.md 7章
+  vi_price: median4
+
   # 水準条件。hybrid では相対水準との OR なので、高VIレジームでの保険として機能する
   vi_threshold: 25
   vi_10d_avg_threshold: 25

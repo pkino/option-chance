@@ -8,13 +8,44 @@ from ..models.option import MarketData
 # VIパーセンタイル順位の既定の参照期間（営業日）。config の gate_vi.vi_percentile_window で上書きされる
 DEFAULT_VI_PERCENTILE_WINDOW = 252
 
+# Gate① の判定に使うVIの値（config の gate_vi.vi_price）
+#   close   = 終値（従来どおり）
+#   open    = 始値（取れない日は終値）
+#   median4 = 始値・高値・安値・終値の中央値（取れた値だけで計算。四本値が無い日は終値）
+# 2026年以降、日経VIの終値が引け際に当日安値まで急落する日が頻発しており、
+# 終値だけで10日SDやパーセンタイルを取るとノイズで判定が崩れる（docs/gate_vi_validation.md 7章）。
+VI_PRICE_MODES = ("close", "open", "median4")
+DEFAULT_VI_PRICE = "close"
+_VI_OHLC_COLUMNS = ["vi", "vi_open", "vi_high", "vi_low"]
+
+
+def compute_vi_gate(df: pd.DataFrame, vi_price: str = DEFAULT_VI_PRICE) -> pd.Series:
+    """Gate① の判定に使うVI系列を返す。"""
+    if vi_price not in VI_PRICE_MODES:
+        raise ValueError(
+            f"gate_vi.vi_price は {', '.join(VI_PRICE_MODES)} のいずれかを指定してください: {vi_price!r}"
+        )
+
+    close = df["vi"].astype(float) if "vi" in df.columns else pd.Series(np.nan, index=df.index)
+    if vi_price == "close":
+        return close
+    if vi_price == "open":
+        if "vi_open" not in df.columns:
+            return close
+        return df["vi_open"].astype(float).fillna(close)
+
+    ohlc = df.reindex(columns=_VI_OHLC_COLUMNS).astype(float)
+    return ohlc.median(axis=1, skipna=True)
+
 
 class TechnicalIndicators:
     """テクニカル指標計算クラス"""
 
     @staticmethod
     def calculate_all(
-        market_data: List[MarketData], vi_percentile_window: int = DEFAULT_VI_PERCENTILE_WINDOW
+        market_data: List[MarketData],
+        vi_percentile_window: int = DEFAULT_VI_PERCENTILE_WINDOW,
+        vi_price: str = DEFAULT_VI_PRICE,
     ) -> pd.DataFrame:
         """
         全てのテクニカル指標を計算
@@ -22,6 +53,7 @@ class TechnicalIndicators:
         Args:
             market_data: MarketDataのリスト
             vi_percentile_window: VIパーセンタイル順位の参照期間（営業日）
+            vi_price: Gate① の判定に使うVIの値（close / open / median4）
 
         Returns:
             指標を含むDataFrame
@@ -37,7 +69,9 @@ class TechnicalIndicators:
         df = TechnicalIndicators._add_moving_averages(df, periods=[5, 20, 25])
         df = TechnicalIndicators._add_volume_indicators(df)
         df = TechnicalIndicators._add_price_patterns(df)
-        df = TechnicalIndicators._add_vi_indicators(df, percentile_window=vi_percentile_window)
+        df = TechnicalIndicators._add_vi_indicators(
+            df, percentile_window=vi_percentile_window, vi_price=vi_price
+        )
 
         return df
 
@@ -151,12 +185,19 @@ class TechnicalIndicators:
 
     @staticmethod
     def _add_vi_indicators(
-        df: pd.DataFrame, percentile_window: int = DEFAULT_VI_PERCENTILE_WINDOW
+        df: pd.DataFrame,
+        percentile_window: int = DEFAULT_VI_PERCENTILE_WINDOW,
+        vi_price: str = DEFAULT_VI_PRICE,
     ) -> pd.DataFrame:
-        """VI（Volatility Index）関連の指標を計算"""
-        if "vi" in df.columns and df["vi"].notna().any():
-            df["vi_ma_10"] = df["vi"].rolling(window=10).mean()
-            df["vi_std_10"] = df["vi"].rolling(window=10).std()
+        """VI（Volatility Index）関連の指標を計算
+
+        vi（終値）はそのまま残し、判定値 vi_gate から MA・SD・CV・順位・傾きを計算する。
+        """
+        df["vi_gate"] = compute_vi_gate(df, vi_price)
+        if df["vi_gate"].notna().any():
+            vi = df["vi_gate"]
+            df["vi_ma_10"] = vi.rolling(window=10).mean()
+            df["vi_std_10"] = vi.rolling(window=10).std()
 
             # 変動係数 CV = STD10 / MA10
             # 絶対SDはVI水準に比例して大きくなるため、水準条件と重複してしまう。
@@ -169,8 +210,7 @@ class TechnicalIndicators:
             # 履歴が半分に満たない期間は NaN のままにし、相対判定を使わせない。
             min_periods = max(20, percentile_window // 2)
             df["vi_pct_1y"] = (
-                df["vi"].rolling(window=percentile_window, min_periods=min_periods).rank(pct=True)
-                * 100
+                vi.rolling(window=percentile_window, min_periods=min_periods).rank(pct=True) * 100
             )
 
             # VIの傾き（10日間の線形回帰）
@@ -179,7 +219,7 @@ class TechnicalIndicators:
                 if i < 9:
                     vi_slope.append(np.nan)
                 else:
-                    y = df["vi"].iloc[i - 9 : i + 1].values
+                    y = vi.iloc[i - 9 : i + 1].values
                     if np.all(np.isnan(y)):
                         vi_slope.append(np.nan)
                     else:
@@ -230,9 +270,12 @@ class SignalDetector:
 
         row = self.df.iloc[idx]
 
+        # 判定値 vi_gate（無ければ終値 vi）で判定する
+        vi_key = "vi_gate" if "vi_gate" in row.index else "vi"
+
         # VIデータがない場合はGate①をスキップ（Trueを返して続行）
         # 日経平均の20日ボラティリティから生成されるため、初期期間以外は通常存在する
-        if pd.isna(row.get("vi")) or pd.isna(row.get("vi_ma_10")):
+        if pd.isna(row.get(vi_key)) or pd.isna(row.get("vi_ma_10")):
             return True, {}
 
         config = self.config["gate_vi"]
@@ -241,7 +284,8 @@ class SignalDetector:
             val = row.get(key)
             return None if val is None or pd.isna(val) else float(val)
 
-        vi = _value("vi")
+        vi = _value(vi_key)
+        vi_close = _value("vi")
         vi_ma_10 = _value("vi_ma_10")
         vi_std_10 = _value("vi_std_10")
         vi_slope_10 = _value("vi_slope_10")
@@ -252,7 +296,9 @@ class SignalDetector:
 
         vi_values = {
             "mode": mode,
-            "vi": vi,
+            "vi_price": str(config.get("vi_price", DEFAULT_VI_PRICE)),
+            "vi": vi,  # 判定に使った値（vi_price に従う）
+            "vi_close": vi_close,
             "vi_ma_10": vi_ma_10,
             "vi_std_10": vi_std_10,
             "vi_slope_10": vi_slope_10,

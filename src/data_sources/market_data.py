@@ -1,6 +1,6 @@
 """市場データ（日経平均、VI等）の取得"""
 from datetime import datetime, date, timedelta
-from typing import List, Optional
+from typing import Dict, List, Optional
 import pandas as pd
 
 from ..models.option import MarketData
@@ -47,11 +47,13 @@ class MarketDataFetcher:
             traceback.print_exc()
             raise
 
-    def fetch_vi_data(
+    def fetch_vi_bars(
         self, start_date: date, end_date: Optional[date] = None, market_data: Optional[List[MarketData]] = None
-    ) -> dict[date, float]:
+    ) -> Dict[date, Dict[str, float]]:
         """
-        日経VIのデータを取得（優先順位：日経公式→20日ボラティリティ計算）
+        日経VIの四本値を取得（優先順位：日経公式→20日ボラティリティ計算）
+
+        20日ボラへのフォールバック時は終値（"close"）だけが入る。
 
         Args:
             start_date: 開始日
@@ -59,7 +61,7 @@ class MarketDataFetcher:
             market_data: 既に取得した日経平均データ（20日ボラ計算用）
 
         Returns:
-            {date: vi_value} の辞書
+            {date: {"close": .., "open": .., "high": .., "low": ..}} の辞書
         """
         if end_date is None:
             end_date = date.today()
@@ -69,38 +71,39 @@ class MarketDataFetcher:
         # 優先順位1: 日経公式サイトから取得
         try:
             print("📊 日経公式サイトからVI取得を試行...")
-            vi_dict = self.nikkei_vi_fetcher.fetch_vi_data(start_date, end_date)
-            if vi_dict and len(vi_dict) > 0:
-                print(f"✅ 日経公式VI取得成功: {len(vi_dict)} 件")
-                return vi_dict
-            else:
-                print("⚠️ 日経公式VI: 空のデータが返されました")
+            bars = self.nikkei_vi_fetcher.fetch_vi_bars(start_date, end_date)
+            if bars:
+                print(f"✅ 日経公式VI取得成功: {len(bars)} 件")
+                return bars
+            print("⚠️ 日経公式VI: 空のデータが返されました")
         except Exception as e:
             print(f"⚠️ 日経公式VI取得失敗: {e}")
 
-        # 優先順位2: 日経平均の20日ボラティリティを計算
+        # 優先順位2: 日経平均の20日ボラティリティを計算（終値のみ）
         print("📊 20日ボラティリティ計算にフォールバック...")
-        if market_data and len(market_data) > 0:
-            vi_dict = self.nikkei_225_fetcher.calculate_20day_volatility(market_data)
-            if vi_dict and len(vi_dict) > 0:
-                print(f"✅ 20日ボラティリティ計算成功: {len(vi_dict)} 件")
-                return vi_dict
-        else:
-            print("⚠️ 日経平均データがないため、20日ボラティリティを計算できません")
-            # market_dataがない場合は日経平均データを取得
+        if not market_data:
+            print("⚠️ 日経平均データがないため、日経平均データを取得して再試行...")
             try:
-                print("  日経平均データを取得して再試行...")
-                nikkei_data = self.fetch_nikkei_data(start_date, end_date)
-                if nikkei_data and len(nikkei_data) > 0:
-                    vi_dict = self.nikkei_225_fetcher.calculate_20day_volatility(nikkei_data)
-                    if vi_dict and len(vi_dict) > 0:
-                        print(f"✅ 20日ボラティリティ計算成功: {len(vi_dict)} 件")
-                        return vi_dict
+                market_data = self.fetch_nikkei_data(start_date, end_date)
             except Exception as e:
                 print(f"⚠️ 日経平均データ取得・ボラティリティ計算失敗: {e}")
+                market_data = []
+
+        if market_data:
+            vi_dict = self.nikkei_225_fetcher.calculate_20day_volatility(market_data)
+            if vi_dict:
+                print(f"✅ 20日ボラティリティ計算成功: {len(vi_dict)} 件")
+                return {d: {"close": v} for d, v in vi_dict.items()}
 
         print("❌ VIデータが取得できませんでした")
         return {}
+
+    def fetch_vi_data(
+        self, start_date: date, end_date: Optional[date] = None, market_data: Optional[List[MarketData]] = None
+    ) -> Dict[date, float]:
+        """日経VIの終値を取得（互換用。四本値が要る場合は fetch_vi_bars）。"""
+        bars = self.fetch_vi_bars(start_date, end_date, market_data=market_data)
+        return {d: bar["close"] for d, bar in bars.items()}
 
     def fetch_market_data_with_vi(
         self, start_date: date, end_date: Optional[date] = None
@@ -119,15 +122,20 @@ class MarketDataFetcher:
         market_data = self.fetch_nikkei_data(start_date, end_date)
 
         # VIデータを取得（日経平均データを渡して20日ボラ計算に利用）
-        vi_dict = self.fetch_vi_data(start_date, end_date, market_data=market_data)
+        vi_bars = self.fetch_vi_bars(start_date, end_date, market_data=market_data)
 
-        # VIをマージ
+        # VIをマージ（始値・高値・安値は Gate① の判定値の算出に使う）
         for data in market_data:
-            if data.date in vi_dict:
-                data.vi = vi_dict[data.date]
+            bar = vi_bars.get(data.date)
+            if bar:
+                data.vi = bar["close"]
+                data.vi_open = bar.get("open")
+                data.vi_high = bar.get("high")
+                data.vi_low = bar.get("low")
 
         vi_count = sum(1 for d in market_data if d.vi is not None)
-        print(f"VI付きデータ: {vi_count} / {len(market_data)}")
+        ohlc_count = sum(1 for d in market_data if d.vi_open is not None)
+        print(f"VI付きデータ: {vi_count} / {len(market_data)}（四本値あり {ohlc_count}）")
 
         return market_data
 

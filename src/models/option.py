@@ -96,8 +96,12 @@ class MarketData:
     close: float
     volume: Optional[int] = None
 
-    # VI（Volatility Index）
+    # VI（Volatility Index）。vi は終値。始値・高値・安値は日経公式CSVから取れた場合のみ入る
+    # （20日ボラへのフォールバック時は None）。Gate① の判定値（中央値など）の算出に使う。
     vi: Optional[float] = None
+    vi_open: Optional[float] = None
+    vi_high: Optional[float] = None
+    vi_low: Optional[float] = None
 
     def __post_init__(self):
         """日付の正規化"""
