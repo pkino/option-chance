@@ -113,7 +113,13 @@ gate_top:
       high_proximity: 0.99  # 直近高値の99%以内
 
     # B2: 上ヒゲ優勢
+    # mode: off | record_only（記録のみ。Bの成立に数えない）| active（Bの条件として数える）
+    # 2023〜2026年の実データで、Gate② の文脈（A かつ B2）では10営業日以内に-5%下落する割合が
+    # 9.7%（31日）と、年ごとの荒さから見込まれる15.2%を下回った。B2をBに含めると
+    # 「A かつ B」の上振れ（B1/B3のみ +1.9pt）が -0.2pt に薄まるため、記録のみに格下げした。
+    # 代替案（高値更新日の上ヒゲ・陰線・反転足など）も基準を上回らなかった。詳細は docs/gate_vi_validation.md 8章
     upper_wick:
+      mode: record_only
       lookback_days: 3
       required_days: 2  # 3日中2日以上
       wick_ratio: 0.4

@@ -202,7 +202,7 @@ python scripts/test_market_data.py
 # JPXデータ取得のテスト（GHA環境推奨）
 python scripts/test_jpx.py
 
-# ユニットテスト（判定履歴・ダッシュボード）
+# ユニットテスト（判定履歴・ダッシュボード）。PR では GitHub Actions（.github/workflows/tests.yml）でも自動実行
 pytest tests/ -v
 ```
 
@@ -270,7 +270,8 @@ GitHubリポジトリの Settings > Secrets and variables > Actions で以下を
 - **B. 需給**（1つ以上）【必須】
   - B1) 高値圏の失速：5日平均÷20日平均 ≤ 0.85。日経公式CSVには出来高が無いため、
     `proxy: auto` では出来高の代わりに**真の値幅（ATR）**で判定する
-  - B2) 上ヒゲ優勢
+  - B2) 上ヒゲ優勢。Gate② の文脈で精度を下げていたため `mode: record_only`（記録のみ）
+    （`docs/gate_vi_validation.md` 8章）
   - B3) ギャップアップ失速
   - B4) VI逆行：高値圏なのに、VI判定値が直近5日の安値から+15%以上（プット需要の増加）。
     根拠がまだ弱いため `mode: record_only`（記録のみ。Bの成立には数えない）で実績を蓄積中
@@ -393,7 +394,8 @@ GitHubリポジトリの Settings > Secrets and variables > Actions で以下を
 - [ ] IV×Γ×Δシミュレーション
 - [ ] 5日以内に動く確率の定量化
 - [ ] B4（VI逆行）の実績を見て `active` に切り替えるか判断
-- [ ] B2（上ヒゲ優勢）の見直し（2023〜2026年の高値圏で、成立日の方が下落率が低い）
+- [ ] B2（上ヒゲ優勢）の実績を見て `active` に戻すか判断（現在は記録のみ）
+- [ ] Gate②A（4条件中1つ以上）の見直し（約6割の日で成立し、選別力が弱い）
 
 ## ライセンス
 

@@ -217,3 +217,80 @@ class TestRecordAndNotification:
     def test_notification_unavailable_b1(self):
         signal = b_signal(b1_values={"proxy_used": "volume", "available": False})
         assert "B1(高値圏の失速): 判定不能（出来高データなし）" in format_signal_for_notification(signal)
+
+
+def b2_frame():
+    """直近3日のうち2日が長い上ヒゲ（B2 が成立する形）。B1・B4 は成立しない。"""
+    df = flat_frame()
+    for i in (23, 24):
+        df.loc[i, "upper_wick_ratio"] = 0.6
+        df.loc[i, "close"] = 100.0  # high 101 * 0.995 = 100.495 以下
+        df.loc[i, "close_max_20"] = 100.5
+    return df
+
+
+def set_b2(config, **values):
+    config = copy.deepcopy(config)
+    config["gate_top"]["supply_demand"]["upper_wick"].update(values)
+    return config
+
+
+class TestB2Mode:
+    def test_shipped_config_is_record_only(self, config):
+        assert config["gate_top"]["supply_demand"]["upper_wick"]["mode"] == "record_only"
+
+    def test_record_only_is_recorded_but_not_counted(self, config):
+        satisfied, details = SignalDetector(b2_frame(), config).detect_gate_top_b(24)
+        assert details["b2_upper_wick_dominance"] is True
+        assert details["b2_counted"] is False
+        assert not satisfied
+
+    def test_active_counts(self, config):
+        satisfied, details = SignalDetector(b2_frame(), set_b2(config, mode="active")).detect_gate_top_b(24)
+        assert details["b2_counted"] is True
+        assert satisfied
+
+    def test_missing_mode_defaults_to_active(self, config):
+        config = copy.deepcopy(config)
+        del config["gate_top"]["supply_demand"]["upper_wick"]["mode"]
+        satisfied, details = SignalDetector(b2_frame(), config).detect_gate_top_b(24)
+        assert details["b2_counted"] is True and satisfied
+
+    def test_off(self, config):
+        ok, values = SignalDetector(b2_frame(), set_b2(config, mode="off"))._check_upper_wick_dominance(24)
+        assert not ok and values == {"mode": "off"}
+
+    def test_invalid_mode(self, config):
+        with pytest.raises(ValueError, match="upper_wick"):
+            SignalDetector(b2_frame(), set_b2(config, mode="on"))._check_upper_wick_dominance(24)
+
+
+class TestSupplyDominantCountsB2OnlyWhenActive:
+    def test_record_only_b2_is_not_counted(self):
+        signal = b_signal(b1_volume_failure=True, b2_upper_wick_dominance=True, b2_counted=False)
+        assert not signal.is_supply_dominant_entry
+
+    def test_active_b2_is_counted(self):
+        signal = b_signal(b1_volume_failure=True, b2_upper_wick_dominance=True, b2_counted=True)
+        assert signal.is_supply_dominant_entry
+
+    def test_legacy_details_without_flag_count_b2(self):
+        signal = b_signal(b1_volume_failure=True, b2_upper_wick_dominance=True)
+        assert signal.is_supply_dominant_entry
+
+
+def test_notification_marks_record_only_b2():
+    signal = b_signal(
+        b2_upper_wick_dominance=True, b2_counted=False,
+        b2_values={"upper_wick_days_count": 2, "upper_wick_ratios": [0.6, 0.6, 0.2]},
+    )
+    assert "B2(上髭優勢・記録のみ)" in format_signal_for_notification(signal)
+
+
+def test_dashboard_labels_record_only_rows(config):
+    from scripts.build_dashboard import build_condition_heatmap
+    record = build_record(b_signal(b2_upper_wick_dominance=True, b2_counted=False), config,
+                          run_date=date(2026, 10, 6))
+    labels = list(build_condition_heatmap([record]).data[0].y)
+    assert "B2 上ヒゲ優勢（記録のみ）" in labels
+    assert "B4 VI逆行（記録のみ）" in labels

@@ -270,9 +270,13 @@ def build_condition_heatmap(records: List[Dict[str, Any]]) -> go.Figure:
     dates = [r["date"] for r in records]
 
     z, labels, text = [], [], []
-    b4_mode = _threshold_text(records, "gate_top", "supply_demand", "vi_divergence", "mode")
+    # 記録のみ（Bの成立に数えない）の条件は行名で明示する
+    record_only = {
+        sub: _threshold_text(records, "gate_top", "supply_demand", cfg_key, "mode") == "record_only"
+        for sub, cfg_key in (("b2", "upper_wick"), ("b4", "vi_divergence"))
+    }
     for section, key, label in SIGNAL_ROWS + CONDITION_ROWS:
-        if key == "b4" and b4_mode == "record_only":
+        if record_only.get(key):
             label = f"{label}（記録のみ）"
         on_value = 2 if (section, key, label) in SIGNAL_ROWS else 1
         values = [on_value if r.get(section, {}).get(key) else 0 for r in records]

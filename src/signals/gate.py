@@ -510,7 +510,8 @@ def format_signal_for_notification(signal: Signal) -> str:
         b2_vals = details_b.get("b2_values", {})
         wick_ratios = b2_vals.get('upper_wick_ratios', [])
         wick_str = ', '.join([f"{r:.2f}" for r in wick_ratios]) if wick_ratios else 'N/A'
-        lines.append(f"     B2(上髭優勢): 該当日数={b2_vals.get('upper_wick_days_count', 'N/A')}, "
+        b2_counted = "" if details_b.get("b2_counted", True) else "・記録のみ"
+        lines.append(f"     B2(上髭優勢{b2_counted}): 該当日数={b2_vals.get('upper_wick_days_count', 'N/A')}, "
                     f"上髭比(3d)=[{wick_str}]")
     if details_b.get("b3_gap_up_failure"):
         b3_vals = details_b.get("b3_values", {})
